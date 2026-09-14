@@ -113,7 +113,7 @@ Maive random splitting leaks information via image duplicates/near-duplicates, s
 |---|---|
 | `train` | stable_diffusion_v_1_4, stable_diffusion_v_1_5, glide, adm, vqdm |
 | `test_ood_genimage` | midjourney, wukong, biggan |
-| `test_wild` | test_wild |
+| `test_wild` | NTIRE |
 | `test_ood_real` | COCO |
 | `test_ood_real_uncompressed` | RAISE |
 

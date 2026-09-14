@@ -2,12 +2,11 @@
 r"""
 Streamlines image downloading, inspection, hashing, probing, metatadata extraction and saving functionalities (Which are performed by the other modules in this project; i.e.- `integrity.py`, `manifest.py`, `selection.py`). This script allows for the same functionalities to be performed across various image sources **(currently for GenImage and COCO Images)
 
-There are two ways of pointing this script at data, chosen via `--layout`:
+There are three ways of pointing this script at data, chosen via `--layout`:
 
 ``--layout flat`` (default)
     Scans one directory of images that all share the same label/generator/split,
-    which you supply explicitly. Use this for sources like COCO where a single
-    folder holds one homogeneous group of images.
+    which you supply explicitly. Use this for sources like COCO and RAISE where a single folder holds one homogeneous group of images.
 
 ``--layout genimage-tree``
     Walks a GenImage-style dataset root in one pass and derives generator, split,
@@ -25,7 +24,20 @@ There are two ways of pointing this script at data, chosen via `--layout`:
             └── nature/
     ```
 
-Usage examples:
+``--layout ntire``
+    Walks a NTIRE-style dataset root looking for every ``labels.csv`` found
+    anywhere under ``--scan``, no matter how deeply nested (one per shard),
+    and pairs each image in that shard's sibling ``images/`` folder with the
+    label recorded for it in the CSV (``image_name`` -> ``label``), rather
+    than a single label supplied for the whole scan. Expects each shard to
+    look like:
+    ```
+    shards_0/
+    ├── images/
+    └── labels.csv
+    ```
+
+Usage examples (replace backslash (\) with backticks (`) if running in PowerShell)
 ```
     # Tiny GenImage: whole dataset (all generators, splits, labels) in one pass
     python scripts/build_manifest.py \
@@ -40,6 +52,20 @@ Usage examples:
         --scan data/raw/coco/val2017 \
         --source coco --label 0 --generator real --split test_ood_real \
         --out data/interim/manifest_coco.parquet
+
+    # NTIRE shards (labels come from each shard's labels.csv, not --label)
+    python scripts/build_manifest.py \
+        --root data/raw \
+        --scan data/raw/ntire \
+        --source ntire --layout ntire --generator mixed --split test_wild \
+        --out data/interim/manifest_ntire.parquet
+
+    # RAISE uncompressed image data
+    python scripts/build_manifest.py `
+        --root data/raw `
+        --scan data/raw/raise `
+        --source raise --label 0 --generator real --split test_ood_real_uncompressed `
+        --out data/interim/manifest_raise.parquet
 ```
 
 Upon running the script we conceputally have a metadata database such as:
@@ -57,6 +83,7 @@ Where column definitions are determined by `manifest.py`. The above metadat data
 
 from __future__ import annotations
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -93,6 +120,50 @@ def discover_genimage_tree_jobs(scan: Path, root: Path, source: str) -> list[tup
     return jobs
 
 
+def discover_ntire_jobs(scan: Path, root: Path, source: str, generator: str,
+                        split: str, content_class_from_parent: bool) -> list[tuple]:
+    """
+    Walk an NTIRE-style dataset tree, treating every ``labels.csv`` found
+    under ``scan`` (at any depth) as defining one shard::
+
+        shards_0/
+        ├── images/
+        └── labels.csv
+
+    Each image under that shard's sibling ``images/`` folder is paired with
+    the label recorded for it in the CSV (``image_name`` -> ``label``).
+    """
+    jobs: list[tuple] = []
+    for labels_csv in sorted(scan.glob("**/labels.csv")):
+        shard_dir= labels_csv.parent
+        images_dir= shard_dir / "images"
+        if not images_dir.is_dir():
+            print(f"  WARNING: {labels_csv} has no sibling 'images' dir, skipping")
+            continue
+
+        label_by_name: dict[str, int]= {}
+        with labels_csv.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                label_by_name[row["image_name"]]= int(row["label"])
+
+        paths= discover_images(images_dir)
+        missing= 0
+        for p in paths:
+            label= label_by_name.get(p.name)
+            if label is None:
+                missing+= 1
+                continue
+            jobs.append((
+                root, p, source, label, generator,
+                p.parent.name if content_class_from_parent else None,
+                split,
+            ))
+        if missing:
+            print(f"  WARNING: {missing} image(s) under {images_dir} have no "
+                  f"label in {labels_csv}, skipped")
+    return jobs
+
+
 def main() -> int:
     ap= argparse.ArgumentParser(description=__doc__,
                                 formatter_class= argparse.RawDescriptionHelpFormatter)
@@ -101,13 +172,15 @@ def main() -> int:
     ap.add_argument("--scan", type= Path, required= True,
                     help= "Directory the program will go through (must be under --root)")
     ap.add_argument("--source", required= True, help= "Specific image source: gemimage | ntire| coco | raise")
-    ap.add_argument("--layout", choices= ["flat", "genimage-tree"], default= "flat",
+    ap.add_argument("--layout", choices= ["flat", "genimage-tree", "ntire"], default= "flat",
                     help= "'flat': one directory, one label/generator/split supplied via the flags below. "
                     "'genimage-tree': scan a whole GenImage-style dataset root in one pass, "
-                    "deriving generator/split/label from the <generator>/<split>/{ai,nature} folder names.")
+                    "deriving generator/split/label from the <generator>/<split>/{ai,nature} folder names. "
+                    "'ntire': scan for every 'labels.csv' under --scan (one per shard, at any depth) and "
+                    "derive each image's label from its shard's labels.csv.")
     ap.add_argument("--label", type= int, choices= [0, 1], default= None,
                     help= "Image label: 0= Human-made, 1= AI-generated. Required for --layout flat; "
-                    "ignored (derived from folder names) for --layout genimage-tree.")
+                    "ignored (derived from folder names / labels.csv) for --layout genimage-tree / ntire.")
     ap.add_argument("--generator", default= "unknown", help= "'real' for human-made images, model name for AI images")
     ap.add_argument("--split", default="unassigned") # train/val partition
     ap.add_argument("--content-class-from-parent", action="store_true",
@@ -126,6 +199,14 @@ def main() -> int:
 
     if args.layout == "genimage-tree":
         jobs= discover_genimage_tree_jobs(args.scan, args.root, args.source)
+        if args.limit:
+            jobs= jobs[: args.limit]
+        print(f"Found {len(jobs)} image files under {args.scan}")
+        if not jobs:
+            return 1
+    elif args.layout == "ntire":
+        jobs= discover_ntire_jobs(args.scan, args.root, args.source, args.generator,
+                                  args.split, args.content_class_from_parent)
         if args.limit:
             jobs= jobs[: args.limit]
         print(f"Found {len(jobs)} image files under {args.scan}")
