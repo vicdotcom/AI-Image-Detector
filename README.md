@@ -10,7 +10,7 @@ As artificial intelligence advances, the boundary between authentic and syntheti
   - [1. Problem Definition](#1-problem-definition)
   - [2. Dataset Strategy](#2-dataset-strategy)
     - [Image Sources](#image-sources)
-    - [bias-matching](#bias-matching)
+    - [Bias-Matching](#bias-matching)
     - [Preprocessing Strategy](#preprocessing-strategy)
     - [Image integrity checks (`Integrity.py`)](#image-integrity-checks-integritypy)
     - [Manifest Construction (`manifest.py`, `build_manifest.py`)](#manifest-construction-manifestpy-build_manifestpy)
@@ -18,6 +18,7 @@ As artificial intelligence advances, the boundary between authentic and syntheti
   - [3. Project Structure (So far)](#3-project-structure-so-far)
   - [4. Setup](#4-setup)
   - [5. Usage](#5-usage)
+  - [6. References](#6-references)
 
 
 ## 1. Problem Definition
@@ -61,11 +62,11 @@ real (ImageNet) / fake pairs across 8 generators, with deliberate bias controls 
 **Metadata-level EDA (`01_genimage_metadata_eda.ipynb`):** before downloading actual image, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own. This is what makes it possible to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
 
 
-### bias-matching
+### Bias-Matching
 
-bias-matching is a data filtering technique designed to eliminate shortcut learning. A generative AI model can output images with distinct metadata: exact canvas dimensions (e.g.- 1024x1024) and consistent JPEG Quality Factors (QF) while *in contrast, real photos come in thousands of random resolutions and compression levels. If a raw dataset is fed to a deep learning model, the neural network may quickly utilize these shortcut signals to classify images. 
+Bias-matching is a data filtering technique designed to eliminate shortcut learning. A generative AI model can output images with distinct metadata: exact canvas dimensions (e.g.- 1024x1024) and consistent JPEG Quality Factors (QF) while *in contrast, real photos come in thousands of random resolutions and compression levels. If a raw dataset is fed to a deep learning model, the neural network may quickly utilize these shortcut signals to classify images. 
 
-Still under metadata EDA, we therefore filter for real and fake images that share the exact same metadata profile, thereby eliminating any predictive signal from image metadata. The bias-matching method applied is however asymmetric where AI-generated images are left untouched and any real images that do not fit the metadata profile are filtered out. This asymmetric implementation is because AI-generated images occupy a narrower band of space compared to real images as they are constrained to their specific generators. Asymmetric bias-matching results in far fewer real images therefore a sufficient image dataset is paramount. 
+We filter for real and fake images that share the exact same metadata profile, thereby eliminating any predictive signal from image metadata. The bias-matching method applied is however asymmetric where AI-generated images are left untouched and any real images that do not fit the metadata profile are filtered out. This asymmetric implementation is because AI-generated images occupy a narrower band of space compared to real images as they are constrained to their specific generators. Asymmetric bias-matching results in far fewer real images therefore a sufficient image dataset is paramount. 
 
 We validate our bias-matching strategy by training a simple Decision Tree classifier on metadata alone. An accuracy score close to 50% (akin to a random guess) means that shortcut learning is successfully eliminated. The higher the accuracy score, the more bias is inherent in the metadata. The results are as follows:
 
@@ -107,7 +108,7 @@ The per-source outputs of the download, integrity and manifest recording steps (
 
 ### Splitting Philosophy
 
-Maive random splitting leaks information via image duplicates/near-duplicates, similar content groups (e.g.- Images of a dog, cars, tables, planes, e.t.c.), and generator or source-specific signatures. Splits here are instead group-aware (duplicate clusters never cross a split), stratified by class/generator/content category, and include held-out-generator test sets so cross-generator generalization and not just in-distribution accuracy, gets measured. The manifest is split as follows:
+Naive random splitting leaks information via image duplicates/near-duplicates, similar content groups (e.g.- Images of a dog, cars, tables, planes, e.t.c.), and generator or source-specific signatures. Splits here are instead group-aware (duplicate clusters never cross a split), stratified by class/generator/content category, and include held-out-generator test sets so cross-generator generalization and not just in-distribution accuracy, gets measured. The manifest is split as follows:
 
 | Split | Sources / Generators |
 |---|---|
@@ -235,3 +236,19 @@ the full multi-hundred-GB dataset. Other sources (`coco`, `genimage`, `ntire`,
 Every download handler writes a `provenance.json` alongside the data,
 recording what was downloaded, when, and its checksum - commit these files
 (they're small); actual images (`data/`) are gitignored.
+
+## 6. References
+
+- Grommelt, P., Weiss, L., Pfreundt, F.-J., & Keuper, J. (2024). *Fake or JPEG? Revealing Common Biases in Generated Image Detection Datasets*. arXiv:2403.17608. https://arxiv.org/abs/2403.17608
+
+  ```bibtex
+  @misc{grommelt2024fakejpegrevealingcommon,
+        title={Fake or JPEG? Revealing Common Biases in Generated Image Detection Datasets}, 
+        author={Patrick Grommelt and Louis Weiss and Franz-Josef Pfreundt and Janis Keuper},
+        year={2024},
+        eprint={2403.17608},
+        archivePrefix={arXiv},
+        primaryClass={cs.CV},
+        url={https://arxiv.org/abs/2403.17608}, 
+  }
+  ```
