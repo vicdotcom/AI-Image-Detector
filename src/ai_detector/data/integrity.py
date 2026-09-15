@@ -268,7 +268,7 @@ def phash(path_or_image: Path | Image.Image, hash_size: int = 8) -> str:
 ## Hamming Distance
 def hamming(hex_a: str, hex_b: str) -> int:
     """
-    This is the core function that tells us whether any two images are similar via computing the Hamming Distance between their pHashes (`hex_a` and `hex_b`).
+    This is the core function that tells us whether any two images are similar via computing the Hamming Distance between their pHashes (`hex_a` and `hex_b`). **Note:** *Hamming distance can onle be computed between two image pairs*
 
     Hamming Distance is a metric that measures how different two equal-length sequences (strings (i.e.- hashes), bit arrays, vectors, etc) are from each other. From the pHashes obtained:
         - 0 to 5 differing bits: Almost certainly the same image (or minor edits/compression).
@@ -277,24 +277,33 @@ def hamming(hex_a: str, hex_b: str) -> int:
 
     The hashes are however not compared directly:
         1. The pHash hexadecimal strings for each image are first converted into integers 
-        2. `^` (XOR operation) then compares the integer values bitwise. 
-        3. The comparison result is comverted into a binary representation via `bin()` (since `int` objects to not have a `count()` method. `str` objects do)
+        2. `^` (Exclusive OR (XOR) operation) then compares the integer values bitwise. 
+        3. The comparison result is comverted into a binary representation via `bin()` (since `int` objects do not have a `count()` method. `str` objects do)
         4. If bits are the same (0), if different (1). The number of differences is the Hamming Distance.
 
-    Example: Suppose we compare two 8-bit hex hashes: `"a5"` and `"f5"`
-        1. Convert to integer:
-            - "a5" -> 10100101
-            - "f5" -> 11110101
-        2. Bitwise XOR
-            10100101  (a5)
-           ^11110101  (f5)
-            ----------
-            01010000  (XOR `int` Result)
-        3. Convert to binary `str``
-            `bin(...)` -> `'0b1010000'`
-        4. Count the differing bits
-            `count("1")`  -> 2
-        Hamming Distance of 2
+    **Example**: Suppose we compare two 8-bit hex hashes: ``"a5"`` and ``"f5"``
+
+    1. Convert to integer:
+
+       - ``"a5"`` -> ``10100101``
+       - ``"f5"`` -> ``11110101``
+
+    2. Bitwise XOR::
+
+         10100101  (a5)
+        ^11110101  (f5)
+        -----------
+         01010000  (XOR int Result)
+
+    3. Convert to binary ``str``:
+
+       ``bin(...)`` -> ``'0b1010000'``
+
+    4. Count the differing bits:
+
+       ``count("1")`` -> ``2``
+
+    **Result**: Hamming Distance of ``2``
     """
     return bin(int(hex_a, 16) ^ int(hex_b, 16)).count("1")
 
@@ -351,7 +360,7 @@ def estimate_jpeg_quality(path: Path) -> int | None:
 ## Duplicate Grouping (An efficient method of grouping possibly similar images together)
 class _UnionFind:
     """
-    Recall the (`hamming()`) function defined above that computes the Hamming Distance between any two images. This class contructs a transitive closure where if Image A is similar to Image B and Image B is similar to Image C then A, B, C should belong in the same group (if A~B and B~C then A, B, C$).
+    Draws from the Hamming Distance between any two images (See `hamming()` function within the same module). This class contructs a transitive closure where if Image A is similar to Image B and Image B is similar to Image C then A, B, C should belong in the same group (if A~B and B~C then A, B, C$).
 
     Extremely useful particularly when splitting images into training and evaluation sets as it prevents any data leakage caused by duplicate or near-duplicate images.
     """
@@ -377,18 +386,18 @@ class _UnionFind:
 
 ## Grouping function for similar pairs
 def near_duplicate_pairs(hashes: Sequence[str], 
-                         max_distance: int= 5, 
-                         n_bands: int= 4) -> list[tuple[int, int, int]]:
+                         max_distance: int= 5, # 0-5 Hamming distance means images are similar
+                         n_bands: int= 8) -> list[tuple[int, int, int]]:
     """
-    This function finds pairs of images whose 64-bit perceptual hashes (`phash()`) differ by at most `max_distance` bits.
+    This function finds pairs of images whose 64-bit perceptual hashes (``phash()``) differ by at most ``max_distance`` bits.
 
     Rather than simply performing pairwise comparisons between images that can result to millions of combinations, we implement Banded Locality-Sensitive Hashing (LSH) which is an algorithmic technique used to find approximate nearest neighbours or similar items in massive datasets.
 
     Banded LSH works by:
-        1. Splitting each 64-bit has integer into `n_bands`
-        2. By the Piegonhole Principle, if two hashes differ by at most `max_distance= 3` bits, those three differing bits can land in at most 3 of the 4 bands. Therefore, at least one 16-bit band must be 100% identical between the two hashes.
+        1. Splitting each 64-bit hash integer into ``n_bands``
+        2. By the Piegonhole Principle, if two hashes differ by at most ``max_distance`` bits, those differing bits can occupy at most ``max_distance`` of the ``n_bands`` bands, so at least one band must match be 100% identical between the two hashes (as long as ``n_bands > max_distance``).
 
-    Returns a list of (`index_a`, `index_b`, `distance`) with `index_a` < `index_b`
+    Returns a list of (``index_a``, ``index_b``, ``distance``) with ``index_a`` < ``index_b``
     """
     band_bits = 64 // n_bands
     buckets: list[dict[int, list[int]]] = [{} for _ in range(n_bands)]
@@ -426,9 +435,7 @@ def group_ids_from_pairs(n_items: int, pairs: Iterable[tuple[int, int, int]]) ->
     This function turns pairwise links into a clean array of group IDs, where each image index receives an integer label. 
 
     Output shape: (n_items,) of int. Items with no matches get their own
-    singleton group. These labels become `group_id` in the manifest and are
-    what you pass to a GroupShuffleSplit so that an entire duplicate cluster
-    lands on one side of the train/test line.
+    singleton group. These labels become ``group_id`` in the manifest and are what you pass to a GroupShuffleSplit so that an entire duplicate cluster lands on one side of the train/test line.
     """
     uf = _UnionFind(n_items)
     for a, b, _ in pairs:
