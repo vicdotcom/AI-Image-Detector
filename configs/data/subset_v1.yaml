@@ -58,10 +58,11 @@ splits:
   val_fraction: 0.10
   test_in_dist_fraction: 0.10
 
-# Near-duplicate clustering. Tune max_distance by eye using the pair grid. 
+# Near-duplicate clustering. Tune max_distance by eye using the pair grid in the image EDA notebook
 # For the Piegonhold Principle to work, ensure phash_max_distance < n_bands
+# See `integrity.near_duplicate_pairs` function for more info
 dedup:
-  phash_max_distance: 5
+  max_distance: 5
   n_bands: 8
 
 # Final level preprocessing applied to each image 

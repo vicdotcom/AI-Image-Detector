@@ -266,9 +266,20 @@ def phash(path_or_image: Path | Image.Image, hash_size: int = 8) -> str:
 
      
 ## Hamming Distance
+def _hamming_int(int_a: int, int_b: int) -> int:
+    """
+    Core bitwise comparison shared by `hamming()` and `near_duplicate_pairs()`.
+
+    Takes already-parsed integers rather than hex strings so callers operating
+    on many hashes (e.g. the pairwise loop in `near_duplicate_pairs()`) don't
+    pay for repeated `int(hex, 16)` parsing.
+    """
+    return bin(int_a ^ int_b).count("1")
+
+
 def hamming(hex_a: str, hex_b: str) -> int:
     """
-    This is the core function that tells us whether any two images are similar via computing the Hamming Distance between their pHashes (`hex_a` and `hex_b`). **Note:** *Hamming distance can onle be computed between two image pairs*
+    This is the core function that tells us whether any two images are similar via computing the Hamming Distance between their pHashes (`hex_a` and `hex_b`). **Note:** *Hamming distance can only be computed between two image pairs*
 
     Hamming Distance is a metric that measures how different two equal-length sequences (strings (i.e.- hashes), bit arrays, vectors, etc) are from each other. From the pHashes obtained:
         - 0 to 5 differing bits: Almost certainly the same image (or minor edits/compression).
@@ -304,8 +315,35 @@ def hamming(hex_a: str, hex_b: str) -> int:
        ``count("1")`` -> ``2``
 
     **Result**: Hamming Distance of ``2``
+
+    Returns an int, the number of differing bits between the two pHashes (the Hamming distance). ``0`` means the hashes are identical.
     """
-    return bin(int(hex_a, 16) ^ int(hex_b, 16)).count("1")
+    return _hamming_int(int(hex_a, 16), int(hex_b, 16))
+
+
+## Vectorized popcount (used by the bucket-comparison loop in `near_duplicate_pairs()`)
+_POPCOUNT_LUT = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
+ # A 256-entry lookup table: _POPCOUNT_LUT[b] == number of set bits in byte value b
+
+def _popcount_u64(x: np.ndarray) -> np.ndarray:
+    """
+    Vectorized Hamming weight (number of set bits) for an array of uint64 values.
+
+    Used to turn a block of pairwise XOR results into Hamming distances all at
+    once, instead of Python's ``bin(...).count("1")`` called once per pair.
+
+    NumPy >= 2.0 ships a native ``np.bit_count`` ufunc which we prefer. This
+    project pins ``numpy>=1.26``, so on older NumPy we fall back to splitting
+    each uint64 into its 8 constituent bytes and summing a per-byte popcount
+    looked up from ``_POPCOUNT_LUT`` (view/reshape only, no per-element Python).
+    """
+    x = np.ascontiguousarray(x)
+    bit_count = getattr(np, "bit_count", None)  # numpy>=2.0 only; absent on this project's numpy>=1.26 floor
+    if bit_count is not None:
+        return bit_count(x)
+    flat_bytes = x.reshape(-1).view(np.uint8).reshape(-1, 8)  # (n, 8) little-endian bytes
+    return _POPCOUNT_LUT[flat_bytes].sum(axis=1, dtype=np.uint8).reshape(x.shape)
+
 
 ## ==================================================================================
 ## JPEG Quality Factor Estimation (How were the images encoded?)
@@ -385,48 +423,76 @@ class _UnionFind:
               # Connects the set containing a with the set containing b by setting one set's root as the parent of the other.
 
 ## Grouping function for similar pairs
-def near_duplicate_pairs(hashes: Sequence[str], 
-                         max_distance: int= 5, # 0-5 Hamming distance means images are similar
-                         n_bands: int= 8) -> list[tuple[int, int, int]]:
+def near_duplicate_pairs(
+        hashes: Sequence[str],
+        max_distance: int= 5, # 0-5 Hamming distance means images are similar
+        n_bands: int= 8,
+        max_bucket_size: int= 5000,
+        row_chunk_size: int= 512) -> list[tuple[int, int, int]]:
     """
     This function finds pairs of images whose 64-bit perceptual hashes (``phash()``) differ by at most ``max_distance`` bits.
 
-    Rather than simply performing pairwise comparisons between images that can result to millions of combinations, we implement Banded Locality-Sensitive Hashing (LSH) which is an algorithmic technique used to find approximate nearest neighbours or similar items in massive datasets.
+    Rather than simply performing pairwise comparisons between images that can result to potentially billions of combinations, we implement Banded Locality-Sensitive Hashing (LSH) which is an algorithmic technique used to find approximate nearest neighbours or similar items in massive datasets.
 
     Banded LSH works by:
-        1. Splitting each 64-bit hash integer into ``n_bands``
-        2. By the Piegonhole Principle, if two hashes differ by at most ``max_distance`` bits, those differing bits can occupy at most ``max_distance`` of the ``n_bands`` bands, so at least one band must match be 100% identical between the two hashes (as long as ``n_bands > max_distance``).
+        1. Splitting each 64-bit hash integer into ``n_bands`` equal-width bands (e.g. 8 bits each when ``n_bands=8``).
+        2. By the Pigeonhole Principle, if two hashes differ by at most ``max_distance`` bits, those differing bits can occupy at most ``max_distance`` of the ``n_bands`` bands, so at least one band must be 100% identical between the two hashes (as long as ``n_bands > max_distance``).
+        3. Bucket construction: within each band, hashes are grouped by that band's bit-slice value, so hashes sharing the same value for a given band fall into the same bucket. Any two hashes that are near-duplicates are therefore guaranteed to co-occur in at least one bucket, without ever comparing every hash against every other hash.
+        4. Pairwise comparison within buckets: only hashes sharing a bucket (i.e. candidates that already agree on one full band) are compared directly. Because buckets are typically small relative to the full dataset, computing the exact Hamming distance for every pair within a bucket is cheap, and only pairs within ``max_distance`` are kept.
+
+    Within each surviving bucket, comparisons are vectorized with NumPy instead
+    of a Python double loop: hashes are pre-converted to a ``uint64`` array
+    once, and each bucket's pairwise Hamming distances are computed via
+    ``np.bitwise_xor.outer`` + ``_popcount_u64()``.
 
     Returns a list of (``index_a``, ``index_b``, ``distance``) with ``index_a`` < ``index_b``
     """
     band_bits = 64 // n_bands
     buckets: list[dict[int, list[int]]] = [{} for _ in range(n_bands)]
- 
-    ints = [int(h, 16) for h in hashes]
-    for idx, value in enumerate(ints):
+
+    ints = np.array([int(h, 16) for h in hashes], dtype=np.uint64)
+      # Converted once up front so every bucket comparison below reuses this array
+      # rather than re-parsing hex strings or rebuilding Python ints per pair.
+    for idx, value in enumerate(ints.tolist()):
         for b in range(n_bands):
             key = (value >> (b * band_bits)) & ((1 << band_bits) - 1)
             buckets[b].setdefault(key, []).append(idx)
- 
+
     seen: set[tuple[int, int]] = set()
     pairs: list[tuple[int, int, int]] = []
     for bucket in buckets:
         for members in bucket.values():
-            if len(members) < 2 or len(members) > 5000:
-                # Huge buckets are almost always degenerate images (flat black
-                # frames). Skipping them keeps this from blowing up; they get
-                # caught by the exact-hash check instead.
+            n_members = len(members)
+            if n_members < 2 or n_members > max_bucket_size:
+                # Default max_bucket_size of 5000 Prevents computational overload from extremely large buckets
+                # Very large buckets may also risks containing degenrate images (e.g.- flat black frames)
                 continue
-            for i in range(len(members)):
-                for j in range(i + 1, len(members)):
-                    a, b_ = members[i], members[j]
+
+            member_idx = np.asarray(members, dtype=np.int64)  # original hash indices, bucket order
+            member_hashes = ints[member_idx]  # (n_members,) uint64, same order as member_idx
+
+            for start in range(0, n_members, row_chunk_size):
+                stop = min(start + row_chunk_size, n_members)
+                row_hashes = member_hashes[start:stop]  # (chunk,)
+
+                # (chunk, n_members) pairwise XOR between this row block and every bucket member
+                xor_block = np.bitwise_xor.outer(row_hashes, member_hashes)
+                dist_block = _popcount_u64(xor_block)  # (chunk, n_members) Hamming distances
+
+                # Keep only j > i (unordered pairs, no self-comparisons/duplicates within this block) and distances within threshold, in one vectorized mask.
+                row_pos = np.arange(start, stop)[:, None]
+                col_pos = np.arange(n_members)[None, :]
+                mask = (col_pos > row_pos) & (dist_block <= max_distance)
+
+                local_i, j = np.nonzero(mask)
+                for li, jj in zip(local_i.tolist(), j.tolist()):
+                    a, b_ = int(member_idx[start + li]), int(member_idx[jj])
                     key = (a, b_) if a < b_ else (b_, a)
                     if key in seen:
+                        # Same pair can co-occur in more than one band's buckets.
                         continue
                     seen.add(key)
-                    dist = bin(ints[a] ^ ints[b_]).count("1")
-                    if dist <= max_distance:
-                        pairs.append((key[0], key[1], dist))
+                    pairs.append((key[0], key[1], int(dist_block[li, jj])))
     return pairs
  
  
