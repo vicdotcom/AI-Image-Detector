@@ -432,7 +432,17 @@ def near_duplicate_pairs(
     """
     This function finds pairs of images whose 64-bit perceptual hashes (``phash()``) differ by at most ``max_distance`` bits.
 
-    Rather than simply performing pairwise comparisons between images that can result to potentially billions of combinations, we implement Banded Locality-Sensitive Hashing (LSH) which is an algorithmic technique used to find approximate nearest neighbours or similar items in massive datasets.
+    Rather than simply performing pairwise comparisons between images that can result to potentially billions of combinations, we implement Banded Locality-Sensitive Hashing (LSH) which is an algorithmic technique used to find approximate nearest neighbours or similar items in massive datasets. In this way, pairwise comparisons are significantly reduced to the nearest neighbour considerations rather than the entire dataset under consideration.
+
+    Params:
+        hashes (Sequence[str]): A ``series`` of image pHashes
+        max_distance (int): Maximum hamming distance for any two images to be considered similar. Default value of 5 is applied.
+        n_bands (int): Number of bands to split individual image ``hashes`` into for forming pairwise comparison candidates. Similar split hashes across the images are placed into buckets for pairwise hamming distance comparison. Defauly of value of 8 for 64-bit perceptual ``hashes``
+        max_bucket_size (int): Maximum number of pairwise candidates to be considered within each bucket. Default value of 5,000.
+        row_chunk_size (int): Pairwise comparisons happen in chunks rather than all at once to avoid exploding memory. This is the number of bucket members processed at a time.
+    
+    Returns:
+        (``image_a``, ``image_b``, ``hamming``) (list[tuple[int, int, int]]): List of image pairs and their hamming distance. Images are indicated by their row index in the dataset with ``index_a`` < ``index_b``.
 
     Banded LSH works by:
         1. Splitting each 64-bit hash integer into ``n_bands`` equal-width bands (e.g. 8 bits each when ``n_bands=8``).
@@ -440,12 +450,7 @@ def near_duplicate_pairs(
         3. Bucket construction: within each band, hashes are grouped by that band's bit-slice value, so hashes sharing the same value for a given band fall into the same bucket. Any two hashes that are near-duplicates are therefore guaranteed to co-occur in at least one bucket, without ever comparing every hash against every other hash.
         4. Pairwise comparison within buckets: only hashes sharing a bucket (i.e. candidates that already agree on one full band) are compared directly. Because buckets are typically small relative to the full dataset, computing the exact Hamming distance for every pair within a bucket is cheap, and only pairs within ``max_distance`` are kept.
 
-    Within each surviving bucket, comparisons are vectorized with NumPy instead
-    of a Python double loop: hashes are pre-converted to a ``uint64`` array
-    once, and each bucket's pairwise Hamming distances are computed via
-    ``np.bitwise_xor.outer`` + ``_popcount_u64()``.
-
-    Returns a list of (``index_a``, ``index_b``, ``distance``) with ``index_a`` < ``index_b``
+        Within each surviving bucket, comparisons are vectorized with NumPy: hashes are pre-converted to a ``uint64`` array once, and each bucket's pairwise Hamming distances are computed via ``np.bitwise_xor.outer`` + ``_popcount_u64()``.
     """
     band_bits = 64 // n_bands
     buckets: list[dict[int, list[int]]] = [{} for _ in range(n_bands)]

@@ -46,6 +46,7 @@ from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 from PIL import Image
+import math
 
 ## Directory for saving images
 FIGDIR= Path("reports/figures")
@@ -214,34 +215,58 @@ def image_grid(
 
 
 ## EDA Plot 4 ------------------------------------------------------------
-def pair_grid(pairs: Sequence[tuple[Path, Path, int]], max_pairs: int = 8) -> Figure:
+def pair_grid(pairs: Sequence[tuple[Path, Path, int]], max_pairs: int = 8, ncols: int =2) -> Figure:
     """
     Show near-duplicate candidates side by side with their bit distance.
  
-    Used to choose the Haming Distance threshold. Walk the distance up until the
+    Used to choose the Hamming Distance ``max_distance`` threshold implemented in ``integrity.near_duplicate_pairs``. Walk the distance up until the
     pairs stop looking like the same picture, then step back one. Recommended threshold is ~5.
 
     Params:
         pairs (Sequence[tuple[Path, Path, int]]): This is a tuple containing: `(image A, image B, Hamming distance)`. 
         max_pairs (int): For managing the number of candidate pairs displayed
+        ncols (int): Number of pair-cells per row.
     
     Returns:
         Figure: Plot of image pairs side by side with their Hamming Distances.
     """
     pairs = list(pairs)[:max_pairs]
-    fig, axes = plt.subplots(len(pairs), 2, figsize=(5, 2.4 * len(pairs)))
-    axes = np.atleast_2d(axes)
-    for row, (a, b, dist) in enumerate(pairs):
-        for col, p in enumerate((a, b)):
-            ax = axes[row, col]
+    if not pairs:
+        fig, ax = plt.subplots(figsize=(4, 2))
+        ax.text(0.5, 0.5, "No pairs to display",
+                ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    n_pairs = len(pairs)
+    nrows = math.ceil(n_pairs / ncols)
+
+    fig, axes = plt.subplots(
+        nrows, ncols * 2,
+        figsize=(2.4 * ncols * 2, 2.7 * nrows),
+        squeeze=False,
+    )
+
+    for i, (a, b, dist) in enumerate(pairs):
+        row, pair_col = divmod(i, ncols)
+        col_a, col_b = pair_col * 2, pair_col * 2 + 1
+
+        for ax, path in ((axes[row, col_a], a), (axes[row, col_b], b)):
             ax.axis("off")
             try:
-                with Image.open(p) as im:
-                    im = im.convert("RGB")
-                    im.thumbnail((220, 220))
-                    ax.imshow(im)
-            except Exception:  # Unreadable images
+                with Image.open(path) as im:
+                    ax.imshow(im.convert("RGB"))
+            except Exception:
                 ax.text(0.5, 0.5, "unreadable", ha="center", va="center")
-        axes[row, 0].set_title(f"hamming = {dist}", fontsize=8, loc="left")
-    fig.tight_layout()
+
+        axes[row, col_a].set_title(f"Hamming = {dist}", fontsize=8, pad=3)
+
+    # Hide unused cells when the number of pairs is uneven.
+    for i in range(n_pairs, nrows * ncols):
+        row, pair_col = divmod(i, ncols)
+        axes[row, pair_col * 2].axis("off")
+        axes[row, pair_col * 2 + 1].axis("off")
+
+    fig.tight_layout(pad=0.5, w_pad=0.2, h_pad=0.8)
     return fig
+
