@@ -44,10 +44,10 @@ ood_generators:
 matching:
   min_side: 450
   max_side: 550
-    # Since majority generators have their modal image image dimesnions around 512x512
-  jpeg_qf: 98
-  jpeg_qf_tolerance: 2
-    # All AI generated images in the dataset have a QF value of exactly 100, while real images have varied QF values ranging from 60 to 100.
+    # Since majority generators have their modal image dimesnions around 512x512
+  jpeg_qf: 96     # 96 since this is the modal jpeg_qg
+  jpeg_qf_tolerance: 0
+    # All AI generated images in the dataset have a QF value of exactly 100 (uncompressed PNGs), while real images have varied QF values ranging from 60 to 100.
     # We restrict the real images to a high range (96-100) where the range still gives us enough real images to work with.
 
 # ---------------------------------------------------------------------
