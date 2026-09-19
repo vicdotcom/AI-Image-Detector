@@ -300,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dest", type=Path, default=None,
         help=f"Destination directory (default: {DEFAULT_DESTS['genimage']})",
     )
-    p_sub.add_argument("--workers", type=int, default=8, help="Concurrent downloads (default: 8)")
+    p_sub.add_argument("--workers", type=int, default=32, help="Concurrent range downloads (default: 32; these are small, latency-bound requests)")
     p_sub.add_argument("--limit", type=int, default=None, help="Only fetch the first N images (dry run)")
     p_sub.set_defaults(func=cmd_genimage_subset)
 
