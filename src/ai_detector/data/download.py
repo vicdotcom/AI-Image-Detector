@@ -267,14 +267,14 @@ def _make_provenance(filename: str, url: str, path: Path) -> ProvenanceRecord:
 # ═══════════════════════════════════════════════════════════════════════
 # Source: GenImage subset (Harvard Dataverse split zip, fetched member-by-member)
 # ═══════════════════════════════════════════════════════════════════════
-def download_genimage_subset(selection: Path, dest: Path, workers: int = 8, limit: int | None = None) -> list[ProvenanceRecord]:
+def download_genimage_subset(selection: Path, dest: Path, workers: int = 32, limit: int | None = None) -> list[ProvenanceRecord]:
     """
     Download only the GenImage images listed in `selection` (a parquet/CSV with a ``path`` column such as the ``matched_balanced`` export) using HTTP Range requests against the Dataverse split zip, so the ~654 GB archive is never downloaded in full.
 
     Params:
         selection (Path): Parquet or CSV file whose ``path`` column holds archive member paths, i.e. ``GenImage/<generator>/<split>/<class>/<file>``.
         dest (Path): Directory the members are written under (their archive paths are preserved).
-        workers (int): Number of concurrent range downloads.
+        workers (int): Number of concurrent range downloads. Images are small, so throughput is latency-bound; 32-64 is far faster than 8.
         limit (int | None): Only fetch the first N selected images (useful for a dry run).
     """
     import pandas as pd

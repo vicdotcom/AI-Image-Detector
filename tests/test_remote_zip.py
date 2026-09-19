@@ -11,6 +11,7 @@ import io
 import struct
 import sys
 import threading
+import time
 import zipfile
 import zlib
 from pathlib import Path
@@ -60,9 +61,15 @@ class FakeZip(RemoteSplitZip):
         self.total_size = len(archive)
         self.part_size = len(archive)
         self.part_ids = [0]
+        self.signed = []
 
     def read(self, offset: int, length: int) -> bytes:
         return self.archive[max(offset, 0):offset + length]
+
+    def _signed_url(self, part: int, refresh: bool = False) -> str:
+        self.signed.append(part)
+        self._urls[part] = ("http://signed", time.time())
+        return "http://signed"
 
 
 @pytest.fixture
@@ -132,7 +139,7 @@ def _range_zip(responses: list) -> tuple[RemoteSplitZip, list]:
     z._signed_url = lambda part, refresh=False: refreshes.append(refresh) or "http://signed"
     it = iter(responses)
 
-    class Session:
+    class Session(requests.Session):
         def get(self, *a, **kw):
             item = next(it)
             if isinstance(item, Exception):
@@ -199,6 +206,20 @@ def test_download_directory_caches_to_disk(rz: FakeZip):
     assert reads == [1 << 20]  # Only the tail probe; the directory itself is not re-downloaded
 
 
+def test_download_directory_fetches_spans_in_parallel(monkeypatch, rz: FakeZip):
+    """Each span is pulled as its own range read and lands at its own offset in the cached blob."""
+    monkeypatch.setattr(remote_zip, "CD_CHUNK", 64)
+    cd_offset, cd_size, _ = rz._locate_directory()
+    spans = []
+    original = rz.read
+    rz.read = lambda offset, length: spans.append((offset, length)) or original(offset, length)
+
+    path = rz._download_directory()
+    assert path.read_bytes() == rz.archive[cd_offset:cd_offset + cd_size]
+    fetched = sorted(s for s in spans if s[1] <= 64)
+    assert fetched == [(cd_offset + rel, min(64, cd_size - rel)) for rel in range(0, cd_size, 64)]
+
+
 def test_read_directory_filters_to_wanted(rz: FakeZip):
     members = rz.read_directory({"a/two.jpg", "b/three.png", "missing.jpg"})
     assert set(members) == {"a/two.jpg", "b/three.png"}
@@ -206,6 +227,44 @@ def test_read_directory_filters_to_wanted(rz: FakeZip):
     assert m.size == len(FILES["b/three.png"])
     assert m.crc32 == zlib.crc32(FILES["b/three.png"])
     assert m.method == zipfile.ZIP_DEFLATED
+
+
+def test_read_directory_caches_an_index_and_drops_the_blob(rz: FakeZip):
+    rz.read_directory({"a/one.jpg"})
+    assert (rz.cache_dir / remote_zip.INDEX_NAME).exists()
+    assert not (rz.cache_dir / "central_directory.bin").exists()
+    assert not list(rz.cache_dir.glob("*.part"))
+
+
+def test_read_directory_second_call_uses_the_index(rz: FakeZip):
+    """A different selection is served from the index alone -- no re-download, no re-parse."""
+    assert set(rz.read_directory({"a/one.jpg"})) == {"a/one.jpg"}
+
+    rz.read = lambda offset, length: pytest.fail("the archive was read again")
+    rz._download_directory = lambda: pytest.fail("the central directory was re-downloaded")
+    members = rz.read_directory(set(FILES))
+    assert set(members) == set(FILES)
+    for name, data in FILES.items():
+        assert members[name].size == len(data)
+        assert members[name].crc32 == zlib.crc32(data)
+
+
+def test_index_holds_every_entry_not_just_the_wanted_ones(rz: FakeZip):
+    import pyarrow.parquet as pq
+
+    rz.read_directory({"a/one.jpg"})
+    table = pq.read_table(rz.cache_dir / remote_zip.INDEX_NAME)
+    assert sorted(table.column("name").to_pylist()) == sorted(n.encode() for n in FILES)
+
+
+def test_build_index_leaves_no_partial_file_on_failure(rz: FakeZip, tmp_path: Path):
+    bad = tmp_path / "bad.bin"
+    bad.write_bytes(b"garbage" * 20)
+    index = rz.cache_dir / remote_zip.INDEX_NAME
+    with pytest.raises(RuntimeError, match="Corrupt central directory"):
+        rz._build_index(bad, index, {"a/one.jpg"})
+    assert not index.exists()
+    assert not list(rz.cache_dir.glob("*.part"))
 
 
 def test_read_directory_parses_zip64_extra_field(rz: FakeZip, tmp_path: Path):
@@ -228,6 +287,22 @@ def test_read_directory_detects_corruption(rz: FakeZip, tmp_path: Path):
     rz._download_directory = lambda: path
     with pytest.raises(RuntimeError, match="Corrupt central directory"):
         rz.read_directory({"a/one.jpg"})
+
+
+# -- Zip64 extra-field helper -------------------------------------------
+def test_zip64_fills_only_the_overflowed_slots():
+    extra = struct.pack("<HHQ", 1, 8, 9_000_000_000)
+    # Only `size` overflowed, so the single 64-bit value belongs to it
+    assert remote_zip._zip64(extra, 0xFFFFFFFF, 17, 42) == (9_000_000_000, 17, 42)
+
+
+def test_zip64_skips_other_extra_fields():
+    extra = struct.pack("<HH4s", 0x5455, 4, b"time") + struct.pack("<HHQ", 1, 8, 5_000_000_000)
+    assert remote_zip._zip64(extra, 1, 2, 0xFFFFFFFF) == (1, 2, 5_000_000_000)
+
+
+def test_zip64_is_a_no_op_without_the_field():
+    assert remote_zip._zip64(b"", 1, 2, 3) == (1, 2, 3)
 
 
 # ── Member extraction ──────────────────────────────────────────────────
@@ -270,6 +345,37 @@ def test_extract_members_skips_existing(rz: FakeZip, tmp_path: Path):
     rz.extract_members(members, dest)
     written, failed = rz.extract_members(members, dest)
     assert written == [] and failed == []
+
+
+def test_extract_members_prewarms_signed_urls(rz: FakeZip, tmp_path: Path):
+    members = list(rz.read_directory(set(FILES)).values())
+    rz.signed.clear()
+    rz.extract_members(members, tmp_path / "out")
+    assert rz.signed == [0]  # Every touched part signed exactly once, up front
+
+
+def test_extract_members_skips_prewarm_when_nothing_to_do(rz: FakeZip, tmp_path: Path):
+    members = list(rz.read_directory(set(FILES)).values())
+    rz.extract_members(members, tmp_path / "out")
+    rz.signed.clear()
+    rz._urls.clear()
+    assert rz.extract_members(members, tmp_path / "out") == ([], [])
+    assert rz.signed == []
+
+
+def test_prewarm_resigns_expired_urls(rz: FakeZip):
+    rz._urls = {0: ("http://stale", time.time() - remote_zip.URL_TTL_SECONDS - 1),
+                1: ("http://fresh", time.time())}
+    rz._prewarm_urls({0, 1})
+    assert rz.signed == [0]  # Only the one past its TTL
+
+
+def test_touched_parts_spans_a_member_crossing_boundaries(rz: FakeZip):
+    rz.part_size = 64
+    rz.total_size = 640
+    rz.part_ids = list(range(10))
+    m = Member("x.jpg", 0, 200, 200, 0, 100)  # Reads bytes 100 .. 100+1054+200
+    assert rz._touched_parts([m]) == {1, 2, 3, 4, 5, 6, 7, 8, 9}
 
 
 def test_extract_members_reports_failures(rz: FakeZip, tmp_path: Path):
