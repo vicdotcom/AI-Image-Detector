@@ -471,13 +471,14 @@ def assign_group_ids(df: pd.DataFrame, phash_col: str = "phash",
 ## ==================================================================================
 def assign_full_splits(df: pd.DataFrame, cfg: SubsetConfig,
     group_col: str = "group_id",
-    genimage_sources: tuple[str, ...] = ("genimage", "tiny_genimage"),
+    genimage_sources: tuple[str, ...] = ("genimage", "unbiased_genimage"),
+    generator_aliases: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
     Extends `assign_genimage_splits` to the whole combined, multi-source
     manifest.
 
-    GenImage/tiny_genimage rows go through the group-aware, generator-aware logic in `assign_genimage_splits` exactly as before. Every other source is a dedicated held-out evaluation set by *design*, so its split is a fixed lookup, never a computed fraction:
+    GenImage / Unbiased GenImage rows go through the group-aware, generator-aware logic in `assign_genimage_splits` exactly as before. Every other source is a dedicated held-out evaluation set by *design*, so its split is a fixed lookup, never a computed fraction:
 
         coco  -> test_ood_real               (false-positive rate on unseen reals)
         ntire -> test_wild                   (blind: unknown generators + transforms)
@@ -487,6 +488,7 @@ def assign_full_splits(df: pd.DataFrame, cfg: SubsetConfig,
       df: combined manifest with `source`, `generator`, `group_id` columns.
       cfg: SubsetConfig (same one driving `assign_genimage_splits`).
       genimage_sources: which `source` values are routed through the generator-based logic; everything else falls through to the fixed lookup table.
+      generator_aliases: optional lookup from a dataset's unique generator names to the names used in `cfg.train_generators` / `cfg.ood_generators`.
 
     Returns:
       pd.DataFrame: copy of df with `split` fully assigned. Raises nothing itself — always follow this with `assert_no_leakage`.
@@ -498,7 +500,10 @@ def assign_full_splits(df: pd.DataFrame, cfg: SubsetConfig,
     df["split"] = "unassigned"
 
     is_genimage = df["source"].isin(genimage_sources)
-    genimage_part = assign_genimage_splits(df[is_genimage], cfg, group_col=group_col)
+    genimage_df = df[is_genimage].copy()
+    if generator_aliases:
+        genimage_df["generator"] = genimage_df["generator"].replace(generator_aliases)
+    genimage_part = assign_genimage_splits(genimage_df, cfg, group_col=group_col)
     df.loc[genimage_part.index, "split"] = genimage_part["split"]
 
     fixed_lookup = {

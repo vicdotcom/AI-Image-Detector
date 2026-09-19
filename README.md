@@ -54,7 +54,6 @@ We aim to produce the best probabilistic estimate from a model fit to a specific
 Candidate sources include:
 - **[GenImage](https://github.com/gendetection/UnbiasedGenImage)** (*Primary image source*) - ~1M
 real (ImageNet) / fake pairs across 8 generators, with deliberate bias controls (matched sizes, controlled JPEG compression).
-- **[Tiny GenImage](https://www.kaggle.com/datasets/yangsangtai/tiny-genimage)** - ~17,500 real/fake pairs across 7 generators, used for initial pipeline development and debugging.
 - **[NTIRE Robust AIGen Detection](https://huggingface.co/datasets/deepfakesMSU/NTIRE-RobustAIGenDetection-train)** - 42 generators, unlabeled augmentations. Used later as a true wild/out-of-distribution test.
 -  **[COCO](https://cocodataset.org/#overview)** - solely real images, used to assess the false-positive rate on an unseen real-image source.
 - **[RAISE](https://loki.disi.unitn.it/RAISE/)** - uncompressed RAW-derived images; the hardest real-image shift.
@@ -135,7 +134,7 @@ ai-image-detector/
 │       └── subset_v1.yaml             # dataset selection specifications: in/out-of distribution generators, data splits, bias-matching thresholds
 │
 ├── data/                              # gitignored - nothing here is committed
-│   ├── raw/                           # immutable downloads (tiny_genimage/, coco/, genimage/, ...)
+│   ├── raw/                           # immutable downloads (coco/, genimage/, ...)
 │   ├── interim/                       # work-in-progress manifests, EDA parquet files
 │   └── processed/                     # final train/val/test manifests (not yet produced)
 │
@@ -150,7 +149,7 @@ ai-image-detector/
 ├── scripts/                           # for one-off tasks such as downloading metadata/images, building manifests, etc.
 │   ├── setup_git.sh                   # one-time repo/branch initialization
 │   ├── download_genimage_metadata.py  # fetches the small GenImage metadata CSV (not the images)
-│   ├── download_images.py             # downloads actual image data: tiny | coco | genimage | ntire | raise | plus download verification
+│   ├── download_images.py             # downloads actual image data: coco | genimage | genimage-subset | ntire | raise | plus download verification
 │   └── build_manifest.py              # builds the dataset manifest from images on disk (next step)
 │
 ├── src/ai_detector/                   # installable package - the reusable logic notebooks/scripts import
@@ -216,21 +215,25 @@ CSV, quantifies dataset shortcuts (e.g. how well a model could classify
 real-vs-fake using *only* image dimensions and JPEG quality), and produces
 `configs/data/subset_v1.yaml` - the dataset selection spec used downstream.
 
-**Step 3 - Download a mini image set (tiny-GenImage)**
+**Step 3 - Download the selected GenImage subset**
+
+The full GenImage archive on [Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi%3A10.7910%2FDVN%2FAKDIHF)
+is ~654 GB split across 500 zip parts. Rather than downloading it, the notebook
+exports the `matched_balanced` selection to
+`data/interim/genimage_matched_balanced.parquet` and the downloader fetches only
+those images using HTTP range requests:
 
 ```bash
-# One-time Kaggle authentication
-kaggle auth login
+# Quick dry run
+python scripts/download_images.py genimage-subset --selection data/interim/genimage_matched_balanced.parquet --limit 50
 
-# Recommended first step: ~8GB, 35,000 images across 7 generators
-python scripts/download_images.py tiny
+# Full selection (re-running skips images already on disk)
+python scripts/download_images.py genimage-subset --selection data/interim/genimage_matched_balanced.parquet
 ```
 
-This gives a small, pre-sampled slice of GenImage - enough to build and debug
-the full pipeline (manifest → EDA → splits → baselines) before committing to
-the full multi-hundred-GB dataset. Other sources (`coco`, `genimage`, `ntire`,
-`raise`) follow the same CLI pattern; run
-`python scripts/download_images.py --help` for details, and
+The first run downloads the archive's ~380 MB central directory (cached in
+`data/raw/genimage/_cache/`). Other sources (`coco`, `ntire`, `raise`) follow the
+same CLI pattern; run `python scripts/download_images.py --help` for details, and
 `python scripts/download_images.py verify` to check what's on disk.
 
 Every download handler writes a `provenance.json` alongside the data,

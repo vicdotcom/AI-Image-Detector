@@ -2,7 +2,7 @@
 This script draws from the API configirations in the module `downloads.py` to download actual image data. 
 
 Handles multiple data sources, each with different protocols
-    ``tiny``: Tiny Genimage mini dataset of 35,000 images (5,000 per generator) (Size ~8GB). Recommended first step for pipeline prototyping.
+    ``genimage-subset``: Only the GenImage images listed in a selection file (e.g. `matched_balanced`), fetched from Harvard Dataverse with HTTP range requests. Recommended.
     ``genimage``: GenImage per-generator images (Google Drive via gdown)
     ``coco``: COCO val2017 (direct HTTP, ~778 MB)
     ``ntire``: NTIRE Robust AI-Gen Detection (HuggingFace Hub)
@@ -12,10 +12,11 @@ Handles multiple data sources, each with different protocols
     
 Usage examples
 --------------
-Start with a mini dataset to get the pipeline working end-to-end prior to comitting the full ~500GB GenImage dataset:
+Download only the bias-matched GenImage subset (exported by notebooks/01_metadata_EDA.ipynb) rather than the full ~650GB archive:
 ```
-    python scripts/download_images.py tiny
+    python scripts/download_images.py genimage-subset --selection data/interim/genimage_matched_balanced.parquet
 ```
+Use `--limit <int>` to download a smaller number of images or for a quick dry run.
 
 Download one GenImage generator from Google Drive (need file ID):
 ```
@@ -53,7 +54,7 @@ Dependencies
 - Core:       ``requests`` (already installed)
 - GenImage:   ``pip install gdown``
 - NTIRE:      ``pip install huggingface_hub``
-- tiny/RAISE: ``pip install kaggle``
+- RAISE:      ``pip install kaggle``
 """
 
 
@@ -65,9 +66,8 @@ from pathlib import Path
 ## Import modules
 try:
     from ai_detector.data.download import(
-        download_tiny_genimage,
         download_coco, 
-        download_genimage_gdrive, download_genimage_gdrive_sample, 
+        download_genimage_gdrive, download_genimage_gdrive_sample, download_genimage_subset,
         extract_genimage_local,
         download_ntire, 
         download_raise,
@@ -77,9 +77,8 @@ except ImportError:
     _root = Path(__file__).resolve().parent.parent / "src"
     sys.path.insert(0, str(_root))
     from ai_detector.data.download import(
-    download_tiny_genimage,
     download_coco, 
-    download_genimage_gdrive, download_genimage_gdrive_sample, 
+    download_genimage_gdrive, download_genimage_gdrive_sample, download_genimage_subset,
     extract_genimage_local,
     download_ntire,
     download_raise, extract_zip, verify_source, write_provenance
@@ -87,7 +86,6 @@ except ImportError:
 
 ## Default destinations (Relative to project root) ---------------
 DEFAULT_DESTS = {
-    "tiny":     Path("data/raw/tiny_genimage"),
     "coco":     Path("data/raw/coco"),
     "genimage": Path("data/raw/genimage"),
     "ntire":    Path("data/raw/ntire"),
@@ -108,21 +106,24 @@ def main() -> int:
 # ═══════════════════════════════════════════════════════════════════════
 # Subcommand handlers
 # ═══════════════════════════════════════════════════════════════════════
-def cmd_tiny(args: argparse.Namespace) -> int:
-    """Handle the 'tiny' subcommand — the mini GenImage dataset."""
-    dest = args.dest or DEFAULT_DESTS["tiny"]
+def cmd_genimage_subset(args: argparse.Namespace) -> int:
+    """Handle the 'genimage-subset' subcommand — only the images listed in a selection file."""
+    dest = args.dest or DEFAULT_DESTS["genimage"]
+    if not args.selection.exists():
+        print(f"ERROR: Selection file not found: {args.selection}", file=sys.stderr)
+        return 1
     print(f"\n{'═' * 60}")
-    print(f"  tiny-genimage (mini dataset) → {dest}")
+    print(f"  GenImage subset ({args.selection.name}) → {dest}")
     print(f"{'═' * 60}\n")
- 
-    records = download_tiny_genimage(dest, force=args.force)
+
+    records = download_genimage_subset(args.selection, dest, workers=args.workers, limit=args.limit)
     if records:
-        prov = write_provenance(dest, records, source="tiny_genimage")
+        prov = write_provenance(dest, records, source="genimage")
         print(f"\nProvenance → {prov}")
         print("COMMIT provenance.json to Git.")
     return 0
- 
- 
+
+
 def cmd_coco(args: argparse.Namespace) -> int:
     """Handle the 'coco' subcommand."""
     dest = args.dest or DEFAULT_DESTS["coco"]
@@ -201,9 +202,9 @@ def cmd_genimage(args: argparse.Namespace) -> int:
             "  3. Copy the ID from the address bar, or right-click a "
             "file → 'Get link' → copy the ID between /d/ and /view\n"
             "\n"
-            "Tip: for a quick pilot, `python scripts/download_images.py "
-            "tiny` gives you 35,000 pre-sampled images across seven "
-            "generators in one command — try that first.\n"
+            "Tip: `python scripts/download_images.py genimage-subset "
+            "--selection <file>` downloads only the images you select, "
+            "with no folder IDs needed.\n"
         )
         return 0
  
@@ -285,22 +286,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = ap.add_subparsers(dest="source", help="Data source to download")
  
-    # ── tiny (mini dataset — recommended first step) ─────────────────
-    p_tiny = sub.add_parser(
-        "tiny",
-        help="Download tiny-genimage mini dataset (~8GB, 35,000 images) "
-             "— recommended first step",
+    # ── genimage-subset ─────────────────────────────────────────────
+    p_sub = sub.add_parser(
+        "genimage-subset",
+        help="Download only the GenImage images listed in a selection file "
+             "(e.g. matched_balanced) from Harvard Dataverse via range requests",
     )
-    p_tiny.add_argument(
+    p_sub.add_argument(
+        "--selection", type=Path, required=True,
+        help="Parquet/CSV with a 'path' column of GenImage archive paths",
+    )
+    p_sub.add_argument(
         "--dest", type=Path, default=None,
-        help=f"Destination directory (default: {DEFAULT_DESTS['tiny']})",
+        help=f"Destination directory (default: {DEFAULT_DESTS['genimage']})",
     )
-    p_tiny.add_argument(
-        "--force", action="store_true",
-        help="Re-download even if files already look present",
-    )
-    p_tiny.set_defaults(func=cmd_tiny)
- 
+    p_sub.add_argument("--workers", type=int, default=32, help="Concurrent range downloads (default: 32; these are small, latency-bound requests)")
+    p_sub.add_argument("--limit", type=int, default=None, help="Only fetch the first N images (dry run)")
+    p_sub.set_defaults(func=cmd_genimage_subset)
+
     # ── coco ────────────────────────────────────────────────────────
     p_coco = sub.add_parser(
         "coco",

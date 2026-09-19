@@ -265,131 +265,40 @@ def _make_provenance(filename: str, url: str, path: Path) -> ProvenanceRecord:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Source: tiny-genimage  (Kaggle — pre-sampled mini GenImage, ~8GB)
+# Source: GenImage subset (Harvard Dataverse split zip, fetched member-by-member)
 # ═══════════════════════════════════════════════════════════════════════
-TINY_GENIMAGE_KAGGLE_SLUG = "yangsangtai/tiny-genimage"
- 
-def download_tiny_genimage(dest: Path, force: bool = False) -> list[ProvenanceRecord]:
+def download_genimage_subset(selection: Path, dest: Path, workers: int = 32, limit: int | None = None) -> list[ProvenanceRecord]:
     """
-    Download the "tiny-genimage" mini dataset from Kaggle.
- 
-    This is a pre-made, already-sampled subset of the full GenImage
-    dataset: 5,000 images per generator (train + val combined) across
-    seven generators, totalling ~8.3 GB. It exists specifically so
-    people can prototype on modest hardware before committing to the
-    full ~500GB dataset — which makes it a good **first step** in your
-    pipeline, run before :func:`download_genimage_gdrive`.
- 
-    Why this instead of hand-rolling a sample
-    ------------------------------------------
-    You could try to sample N images yourself from the Google Drive
-    mirror (see :func:`download_genimage_gdrive_sample`), but that
-    depends on the Drive folder exposing individual files rather than
-    per-generator zips, which isn't guaranteed. tiny-genimage sidesteps
-    that uncertainty entirely: someone has already done the sampling,
-    packaged it, and made it a single reliable download.
- 
-    Trade-off to know about
-    ------------------------
-    Because someone else did the sampling, you inherit **their**
-    sampling decisions (how many images, which ones, how classes are
-    balanced) rather than choosing your own. For a pilot to get the
-    pipeline working end-to-end, that's a fine trade. For your actual
-    training run, you'll likely want to go back to a source you sample
-    yourself so the split logic in `selection.py` controls the
-    composition directly.
- 
-    Authentication
-    --------------
-    The Kaggle API requires credentials. Options:
-      1. Run `kaggle auth login` once (OAuth flow, no token file needed).
-      2. Otherwise, you can generate a token at https://www.kaggle.com/settings/api and
-         save it to ``~/.kaggle/kaggle.json`` (or set
-         ``KAGGLE_USERNAME``/``KAGGLE_KEY`` environment variables).
- 
-    Parameters
-    ----------
-    dest : Path
-        Where to extract the dataset (e.g. ``data/raw/tiny_genimage``).
-    force : bool
-        If ``True``, re-download even if files already look present.
- 
-    Returns
-    -------
-    list[ProvenanceRecord]
-        A single record summarizing the dataset download (Kaggle
-        datasets don't expose individual per-file checksums through
-        this API the way Dataverse does, so we record the dataset slug,
-        total bytes on disk, and download time instead of a per-file
-        list).
+    Download only the GenImage images listed in `selection` (a parquet/CSV with a ``path`` column such as the ``matched_balanced`` export) using HTTP Range requests against the Dataverse split zip, so the ~654 GB archive is never downloaded in full.
+
+    Params:
+        selection (Path): Parquet or CSV file whose ``path`` column holds archive member paths, i.e. ``GenImage/<generator>/<split>/<class>/<file>``.
+        dest (Path): Directory the members are written under (their archive paths are preserved).
+        workers (int): Number of concurrent range downloads. Images are small, so throughput is latency-bound; 32-64 is far faster than 8.
+        limit (int | None): Only fetch the first N selected images (useful for a dry run).
     """
-    dest.mkdir(parents=True, exist_ok=True)
-    records: list[ProvenanceRecord] = []
- 
-    # ── Skip check ──────────────────────────────────────────────────
-    if not force:
-        n = _count_images(dest)
-        if n >= 30_000:  # tiny-genimage has 35,000 images total
-            print(f"  [skip] tiny-genimage already present "
-                  f"({n:,} images in {dest})")
-            return records
- 
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-    except ImportError:
-        print(
-            "ERROR: kaggle is required for this download.\n"
-            "Install it:  pip install kaggle\n"
-            "Then authenticate: kaggle auth login\n"
-            "  (or place a token at ~/.kaggle/kaggle.json)",
-            file=sys.stderr,
-        )
-        sys.exit(1)
- 
-    print(f"Authenticating with Kaggle ...")
-    api = KaggleApi()
-    try:
-        api.authenticate()
-    except Exception as e:
-        print(
-            f"ERROR: Kaggle authentication failed — {e}\n"
-            "Run `kaggle auth login` or place a token at "
-            "~/.kaggle/kaggle.json, then try again.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
- 
-    print(
-        f"Downloading {TINY_GENIMAGE_KAGGLE_SLUG} "
-        f"(~8.3 GB, 35,000 images) → {dest} ..."
-    )
-    # unzip=True extracts automatically and removes the zip afterward,
-    # so we don't need a separate extract_zip() call here — Kaggle's
-    # client handles that internally.
-    api.dataset_download_files(
-        TINY_GENIMAGE_KAGGLE_SLUG,
-        path=str(dest),
-        unzip=True,
-        quiet=False,
-        force=force,
-    )
- 
-    n = _count_images(dest)
-    total_bytes = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
-    print(f"  ✓ tiny-genimage: {n:,} images in {dest} "
-          f"({total_bytes / 1e9:.1f} GB)")
- 
-    records.append(ProvenanceRecord(
-        filename=TINY_GENIMAGE_KAGGLE_SLUG.replace("/", "_"),
-        source_url=f"https://www.kaggle.com/datasets/{TINY_GENIMAGE_KAGGLE_SLUG}",
-        bytes=total_bytes,
-        sha256="",  # many files — Kaggle doesn't expose a single dataset hash
-        downloaded_utc=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    ))
- 
-    return records
- 
- 
+    import pandas as pd
+    from ai_detector.data.remote_zip import RemoteSplitZip, DOI
+
+    df = pd.read_parquet(selection) if selection.suffix == ".parquet" else pd.read_csv(selection)
+    wanted = list(dict.fromkeys(df["path"]))[:limit]
+    print(f"  {len(wanted)} images requested from {selection.name}")
+
+    zf = RemoteSplitZip(cache_dir=dest / "_cache", workers=workers)
+    members = zf.read_directory(set(wanted))
+    missing = [w for w in wanted if w not in members]
+    if missing:
+        print(f"  WARNING: {len(missing)} requested paths are not in the archive (e.g. {missing[:3]})")
+
+    written, failed = zf.extract_members(members.values(), dest)
+    print(f"  ✓ {len(written)} written, {len(members) - len(written) - len(failed)} already present, {len(failed)} failed")
+    for name, err in failed[:10]:
+        print(f"    FAILED {name}: {err}")
+
+    url = f"https://dataverse.harvard.edu/dataset.xhtml?persistentId={DOI}"
+    return [_make_provenance(name, url, dest / name) for name in members if (dest / name).exists()]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Source: COCO val2017
 # ═══════════════════════════════════════════════════════════════════════
@@ -703,9 +612,8 @@ def download_genimage_gdrive_sample(
             "become visible after extracting the zip. Options:\n"
             "  1. Download the full zip with download_genimage_gdrive() "
             "and subsample after extraction.\n"
-            "  2. Use the 'tiny-genimage' pre-sampled mirror instead "
-            "(5,000 images/generator, ~8GB total, on HuggingFace as "
-            "TheKernel01/Tiny-GenImage)."
+            "  2. Use the 'genimage-subset' subcommand to fetch only the "
+            "images you need from Harvard Dataverse."
         )
         return records
  

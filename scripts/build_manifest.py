@@ -37,27 +37,27 @@ There are three ways of pointing this script at data, chosen via `--layout`:
     └── labels.csv
     ```
 
-Usage examples (replace backslash (\) with backticks (`) if running in PowerShell)
+Usage examples (Backticks enable multi-row commands in PowerShell terminal)
 ```
-    # Tiny GenImage: whole dataset (all generators, splits, labels) in one pass
-    python scripts/build_manifest.py \
-        --root data/raw \
-        --scan data/raw/tiny_genimage \
-        --source genimage --layout genimage-tree \
+    # GenImage layout. Be sure to specify the source as genimage_tiny (for the smaller image dataset) or genimage (if working with the full data)
+    python scripts/build_manifest.py `
+        --root data/raw `
+        --scan data/raw/tiny_genimage `
+        --source genimage_tiny --layout genimage-tree `
         --out data/interim/manifest_tiny_genimage.parquet
 
     # COCO real images (flat layout, label supplied explicitly)
-    python scripts/build_manifest.py \
-        --root data/raw \
-        --scan data/raw/coco/val2017 \
-        --source coco --label 0 --generator real --split test_ood_real \
+    python scripts/build_manifest.py `
+        --root data/raw `
+        --scan data/raw/coco/val2017 `
+        --source coco --label 0 --generator real --split test_ood_real `
         --out data/interim/manifest_coco.parquet
 
     # NTIRE shards (labels come from each shard's labels.csv, not --label)
-    python scripts/build_manifest.py \
-        --root data/raw \
-        --scan data/raw/ntire \
-        --source ntire --layout ntire --generator mixed --split test_wild \
+    python scripts/build_manifest.py `
+        --root data/raw `
+        --scan data/raw/ntire `
+        --source ntire --layout ntire --generator mixed --split test_wild `
         --out data/interim/manifest_ntire.parquet
 
     # RAISE uncompressed image data
