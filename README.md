@@ -41,7 +41,7 @@ This is however not a straight-forward task. The model, rather than distinguish 
 
   - A model trained on one generator family (e.g.- Midjourney) tends to learn that family's fingerprint rather than "AI-ness" in general, so accuracy can collapse on an unseen generator (e.g.- DALL-E), a form of [distribution shift](https://parasdahal.com/notes/distribution-shift/).
   - If the images from each class differ systematically in resolution/format/compression, etc..., a model can learn *that* instead (shortcut learning)
-  - Image duplicates or near duplicates can present a form of data leakage if they are spread between train/validation/test splits
+  - Image duplicates or near duplicates can present a form of data leakage in the event they are spread between train/validation/test splits
 
 We aim to produce the best probabilistic estimate from a model fit to a specific distribution. That is: *image is likely AI-generated (model score 0.91)*. Our objective and scope for the project is therefore as follows: 
 > Build a binary image classifier that, given a single still image, outputs a calibrated probability that the image was fully synthesized by a generative model.
