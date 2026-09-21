@@ -39,12 +39,12 @@ There are three ways of pointing this script at data, chosen via `--layout`:
 
 Usage examples (Backticks enable multi-row commands in PowerShell terminal)
 ```
-    # GenImage layout. Be sure to specify the source as genimage_tiny (for the smaller image dataset) or genimage (if working with the full data)
+    # GenImage layout (For the unbiased GenImage dataset)
     python scripts/build_manifest.py `
         --root data/raw `
-        --scan data/raw/tiny_genimage `
-        --source genimage_tiny --layout genimage-tree `
-        --out data/interim/manifest_tiny_genimage.parquet
+        --scan data/raw/genimage/GenImage `
+        --source genimage_unbiased --layout genimage-tree `
+        --out data/interim/manifest_unbiased_genimage.parquet
 
     # COCO real images (flat layout, label supplied explicitly)
     python scripts/build_manifest.py `

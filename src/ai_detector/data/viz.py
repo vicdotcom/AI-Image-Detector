@@ -270,3 +270,30 @@ def pair_grid(pairs: Sequence[tuple[Path, Path, int]], max_pairs: int = 8, ncols
     fig.tight_layout(pad=0.5, w_pad=0.2, h_pad=0.8)
     return fig
 
+
+## Summary Table
+def summarize_generators(data: pd.DataFrame, generator_col: str = "generator",
+                         width_col: str = "width", height_col: str = "height",
+                         qf_col: str = "jpeg_qf") -> pd.DataFrame:
+    """Return per-generator image dimension and JPEG-quality statistics."""
+
+    def modal(series):
+        values = series.dropna()
+        return values.mode().iloc[0] if not values.empty else np.nan
+
+    aggregations = {
+        "n": (generator_col, "size"),
+        "modal_w": (width_col, modal),
+        "modal_h": (height_col, modal),
+        "median_w": (width_col, "median"),
+        "median_h": (height_col, "median"),
+    }
+
+    profile = data.groupby(generator_col).agg(**aggregations)
+
+    if qf_col in data.columns:
+        profile["modal_qf"] = data.groupby(generator_col)[qf_col].agg(modal)
+        profile["qf_std"] = data.groupby(generator_col)[qf_col].std().round(2)
+
+    return profile.sort_values("generator", ascending= True)
+
