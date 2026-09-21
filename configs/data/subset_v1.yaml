@@ -69,7 +69,7 @@ dedup:
 # images are resized and re-encoded in order to eliminate any signal from dimensions and jpeg_qf
 preprocessing:
   image_size: 512 
-  jpeg_qf: 98
+  jpeg_qf: 96
 
 # ---------------------------------------------------------------------
 # Pilot. Scaling up to the full dataset means changing ONE number here.

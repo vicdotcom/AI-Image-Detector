@@ -1,7 +1,7 @@
 # AI Image Detection
 As artificial intelligence advances, the boundary between authentic and synthetic imagery is becoming increasingly difficult to distinguish. This is an end-to-end image classifier that detects whether images are **AI-generated** or **human-made**. Currently a work-in-progress.
 
-**Current stage:** Image data download and validation (i.e.- Checking for corrupted images, recording image metadata: dimensions, JPEG quality, image source, specific AI generator, real/AI labels, etc....) pipeline is complete. Currently working on image EDA, preprocessing and train/validation/test splitting prior to employing a deep learning model for training and evaluation.
+**Current stage:** Image data download and validation (i.e.- Checking for corrupted images, recording image metadata: dimensions, JPEG quality, image source, specific AI generator, real/AI labels, etc....) pipeline is complete. Metadata-level EDA and bias-matching are complete, and image-level EDA (near-duplicate clustering across all sources) is done. Currently working on image preprocessing and train/validation/test splitting prior to employing a deep learning model for training and evaluation.
 
 
 ## Table of Contents
@@ -23,30 +23,30 @@ As artificial intelligence advances, the boundary between authentic and syntheti
 
 ## 1. Problem Definition
 
-In a real-world setting there are three classes of images that we may encounter:
+We may want to build a model that distinguishes between the following image types:
 
 - **Fully synthetic:** text-to-image output - Stable Diffusion,
   Midjourney, DALL·E, etc.
 - **Human-authored:** camera photos, scanned art, hand-made
   digital illustration.
-- **AI-edited / hybrid** (in-painting, generative fill, upscaling, style
-  transfer): This is currently out of the scope of this project, though robustness to these image types will be evaluated at a later stage.
 
-Formally, this is binary classification problem where: given a pixel tensor $x \in \mathbb{R}^{H \times W \times 3}$ (i.e.- the numerical representation of an image), we predict whether the image is human-made or AI-generated ($y \in \{\text{human, AI}\}$)
-using a probabilistic estimate within range $[0,1]$ where values closer to 1 indicate a higher likelihood of being AI-generated.
 
-This is however not a straight-forward task. A model trained on one generator family (e.g.- Midjourney) tends to learn that family's fingerprint rather than "AI-ness" in general, so accuracy can collapse on an unseen generator (e.g.- DALL-E), a form of [distribution shift](https://parasdahal.com/notes/distribution-shift/).
-This can be due to the following reasons: 
+<!-- - **AI-edited / hybrid** (in-painting, generative fill, upscaling, style
+  transfer): This is currently out of the scope of this project, though robustness to these image types will be evaluated at a later stage. -->
 
-- If the two classes differ systematically in resolution/format/compression, etc..., a model will happily learn *that* instead (**shortcut learning**)
-- Generator developers are actively optimizing to eliminate the very artifacts we are seeking to detect
-- Real-world post-processing (resizing, recompressing, screenshots, re-upload) erodes forensic signal.
+<!-- Formally, this is binary classification problem where: given a pixel tensor $x \in \mathbb{R}^{H \times W \times 3}$ (i.e.- the numerical representation of an image), we predict whether the image is human-made or AI-generated ($y \in \{\text{human, AI}\}$)
+using a probabilistic estimate within range $[0,1]$ where values closer to 1 indicate a higher likelihood of being AI-generated. -->
 
+This is however not a straight-forward task. The model, rather than distinguish genuine image artifacts, may instead "cheat" and use secondary image characteristics perform the classification: 
+
+  - A model trained on one generator family (e.g.- Midjourney) tends to learn that family's fingerprint rather than "AI-ness" in general, so accuracy can collapse on an unseen generator (e.g.- DALL-E), a form of [distribution shift](https://parasdahal.com/notes/distribution-shift/).
+  - If the images from each class differ systematically in resolution/format/compression, etc..., a model can learn *that* instead (shortcut learning)
+  - Image duplicates or near duplicates can present a form of data leakage if they are spread between train/validation/test splits
 
 We aim to produce the best probabilistic estimate from a model fit to a specific distribution. That is: *image is likely AI-generated (model score 0.91)*. Our objective and scope for the project is therefore as follows: 
 > Build a binary image classifier that, given a single still image, outputs a calibrated probability that the image was fully synthesized by a generative model.
 
-> This classifier will be trained on multiple diffusion-family generators and multiple real-image sources, and evaluated primarily on both in-distribution and held-out generators rather than on i.i.d. (independent and identically distributed) sets.
+> In building the classifier, we also construct an image download and preprocessing pipeline that actively minimizes the abovementioned problems. Minimizing shortcut signals leads to improved image classification accuracy [Grommelt et al. (2024)](https://arxiv.org/abs/2403.17608).
 
 ## 2. Dataset Strategy
 
@@ -58,41 +58,42 @@ real (ImageNet) / fake pairs across 8 generators, with deliberate bias controls 
 -  **[COCO](https://cocodataset.org/#overview)** - solely real images, used to assess the false-positive rate on an unseen real-image source.
 - **[RAISE](https://loki.disi.unitn.it/RAISE/)** - uncompressed RAW-derived images; the hardest real-image shift.
 
-**Metadata-level EDA (`01_genimage_metadata_eda.ipynb`):** before downloading actual image, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own. This is what makes it possible to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
+**Metadata-level EDA (`01_metadata_EDA.ipynb`):** before downloading actual image, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own. This is what makes it possible to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
 
 
 ### Bias-Matching
 
-Bias-matching is a data filtering technique designed to eliminate shortcut learning. A generative AI model can output images with distinct metadata: exact canvas dimensions (e.g.- 1024x1024) and consistent JPEG Quality Factors (QF) while *in contrast, real photos come in thousands of random resolutions and compression levels. If a raw dataset is fed to a deep learning model, the neural network may quickly utilize these shortcut signals to classify images. 
+Bias-matching is a data filtering technique designed to eliminate shortcut learning. A generative AI model can output images with distinct metadata: exact canvas dimensions (e.g.- 1024x1024) and consistent JPEG Quality Factors (QF), while *in contrast*, real photos come in thousands of random resolutions and compression levels. If a raw dataset is fed to a deep learning model, the network may quickly exploit these shortcut signals to classify images.
 
-We filter for real and fake images that share the exact same metadata profile, thereby eliminating any predictive signal from image metadata. The bias-matching method applied is however asymmetric where AI-generated images are left untouched and any real images that do not fit the metadata profile are filtered out. This asymmetric implementation is because AI-generated images occupy a narrower band of space compared to real images as they are constrained to their specific generators. Asymmetric bias-matching results in far fewer real images therefore a sufficient image dataset is paramount. 
+We filter for real and fake images that share the same metadata profile, thereby eliminating predictive signal from image metadata (`01_metadata_EDA.ipynb`). The bias-matching applied is asymmetric: AI-generated images are left untouched while real images that do not fit the metadata profile are filtered out. This is because AI-generated images occupy a narrower band of metadata space than real images, as they are constrained to their specific generators.
 
-We validate our bias-matching strategy by training a simple Decision Tree classifier on metadata alone. An accuracy score close to 50% (akin to a random guess) means that shortcut learning is successfully eliminated. The higher the accuracy score, the more bias is inherent in the metadata. The results are as follows:
+**Findings from the GenImage metadata (2,681,150 images, 9 generators/classes):**
+- All AI images are PNGs (QF = 100) with generator-specific sizes: 128x128 (BigGAN), 256x256 (ADM, GLIDE, VQDM), 512x512 (Stable Diffusion v1.4/v1.5, Wukong) and 1024x1024 (Midjourney). Real (ImageNet, `nature`) images vary widely in size (modal 500x375) and quality.
+- The modal real-image QF is **96** (903,382 of 1,331,167 real images, 67.86%), so matching is done at QF = 96 with zero tolerance, with real-image sides restricted to 450-550 px.
+- Asymmetric matching retains only **41,753 of 1,331,167 real images (3.14%)**, so a large starting pool is paramount.
+- Only the generators producing ~512x512 images are kept (Stable Diffusion v1.4, v1.5, Wukong, Midjourney), leaving 677,994 AI images (50.22%). These are then undersampled to balance the classes and equalise images per generator: **83,505 images (41,753 human / 41,752 AI, 10,438 per AI generator)**.
+- After matching, image `width`/`height` no longer carry label information, but `jpeg_qf` still fully determines the label (feature importance 1.0) since every AI image remains a QF = 100 PNG while every real image is QF = 96. This signal is removed at the preprocessing stage below.
 
-```yaml
-metadata-only accuracy BEFORE matching: 0.9960
-metadata-only accuracy AFTER  matching: 0.9369
-chance level:                           0.9693
-```
-
-Where chance level is the accuracy obtained by always predicting the majority class.
-
-The reduction in accuracy justifies our strategy. We found the shortcut signal to primarily lie in JPEG QF where all AI images are encoded with JPEG QF = 100 compared to real images with varying compression values:
-
-<!-- <img src="image.png" alt="alt text" width="75%"> -->
 ![alt text](image.png)
 
-With this in mind we propose the following image preprocessing strategy: 
+The matched, balanced selection is exported to `data/interim/genimage_matched_balanced.parquet` and used as the index for downloading only those images.
 
 ### Preprocessing Strategy
 
-Even after bias-matched sampling, residual dimension/compression differences can leak through. The proposed preprocessing step therefore normalizes both signals directly:
-- Re-encode images to a uniform JPEG quality factor (QF).
-- Resize images to a uniform width and height.
+Following [Grommelt et al. (2024)](https://arxiv.org/abs/2403.17608), the residual dimension/compression differences are normalized directly:
+- **Re-encode the AI images at JPEG QF = 96** to match the real images' compression.
+- **Content balancing:** *"We then sampled the same number of generated images for each 512x512 generator. To avoid disparities in content distribution between natural and generated images, we ensured an equal number of natural and generated images per ImageNet class."*
+- Crop/resize both real and AI images to a uniform 512x512 so a transform is never applied to only one class.
 
 ### Image integrity checks (`Integrity.py`)
 
-Every downloaded image is validated before being added to a manifest (see below [Manifest Construction](#manifest-construction) section) with validation methods including: corruption/truncation probing, SHA-256 hashing (exact-duplicate detection), and perceptual hashing (near-duplicate detection), plus JPEG quality estimation used by the bias-matching and preprocessing steps above. See `integrity.py` for full method descriptions.
+Every downloaded image is validated before being added to a manifest (see below [Manifest Construction](#manifest-construction) section) with validation methods including: 
+  - **Corruption/truncation probing**- Checks whether the image files van be decoded (i.e.- Images can be opened and their metadata can be read)
+  - **Duplicate checking**- Done be generating a unique SHA-256 hash per image. Exact image duplicates have the same hash.
+  - **Perceptual hashing**- A unique perceptual hash is generated per image for detecting similar looking images. 
+  - **JPEG quality estimation**- Computing the JPEG QF values of images. Crucial for image preprocessing and bias reduction.  
+
+See `integrity.py` for full method descriptions.
 
 ### Manifest Construction (`manifest.py`, `build_manifest.py`)
 
@@ -111,8 +112,8 @@ Naive random splitting leaks information via image duplicates/near-duplicates, s
 
 | Split | Sources / Generators |
 |---|---|
-| `train` | stable_diffusion_v_1_4, stable_diffusion_v_1_5, glide, adm, vqdm |
-| `test_ood_genimage` | midjourney, wukong, biggan |
+| `train` | stable_diffusion_v_1_4, stable_diffusion_v_1_5, wukong |
+| `test_ood_genimage` | midjourney |
 | `test_wild` | NTIRE |
 | `test_ood_real` | COCO |
 | `test_ood_real_uncompressed` | RAISE |
@@ -139,8 +140,8 @@ ai-image-detector/
 │   └── processed/                     # final train/val/test manifests (not yet produced)
 │
 ├── notebooks/
-│   ├── 01_genimage_metadata_eda.ipynb # metadata-only EDA; decides dataset composition before downloading images
-│   └── 02_image_level_eda.ipynb       # pixel-level EDA (dimensions, corruption, duplicates) - runs once images + manifest exist
+│   ├── 01_metadata_EDA.ipynb # metadata-only EDA; decides dataset composition before downloading images
+│   └── 02_image_EDA.ipynb       # image-level EDA: combines per-source manifests (138,805 images), drops corrupt/all-black images (29 removed), clusters near-duplicates and assigns splits
 │
 ├── reports/
 │   ├── figures/                       # plots obtained from notebook EDA
@@ -207,7 +208,7 @@ without touching the 500GB of actual images.
 **Step 2: Metadata-level EDA**
 
 ```bash
-jupyter lab notebooks/01_genimage_metadata_eda.ipynb
+jupyter lab notebooks/01_metadata_EDA.ipynb
 ```
 
 Explores class/generator/size/compression distributions from the metadata
