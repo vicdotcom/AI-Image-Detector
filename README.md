@@ -1,7 +1,7 @@
 # AI Image Detection
 As artificial intelligence advances, the boundary between authentic and synthetic imagery is becoming increasingly difficult to distinguish. This is an end-to-end image classifier that detects whether images are **AI-generated** or **human-made**. Currently a work-in-progress.
 
-**Current stage:** Image data download and validation (i.e.- Checking for corrupted images, recording image metadata: dimensions, JPEG quality, image source, specific AI generator, real/AI labels, etc....) pipeline is complete. Metadata-level EDA and bias-matching are complete, and image-level EDA (near-duplicate clustering across all sources) is done. Currently working on image preprocessing and train/validation/test splitting prior to employing a deep learning model for training and evaluation.
+**Current stage:** Image data download and validation (i.e.- Checking for corrupted images, recording image metadata: dimensions, JPEG quality, image source, specific AI generator, real/AI labels, etc....) pipeline is complete. Currently working on image preprocessing and train/validation/test splitting prior to employing a deep learning model for training and evaluation.
 
 
 ## Table of Contents
