@@ -58,7 +58,8 @@ real (ImageNet) / fake pairs across 8 generators, with deliberate bias controls 
 -  **[COCO](https://cocodataset.org/#overview)** - solely real images, used to assess the false-positive rate on an unseen real-image source.
 - **[RAISE](https://loki.disi.unitn.it/RAISE/)** - uncompressed RAW-derived images; the hardest real-image shift.
 
-**Metadata-level EDA (`01_metadata_EDA.ipynb`):** before downloading actual image, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own. This is what makes it possible to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
+### Metadata Analysis
+Rather than instantly downloading the full ~600 GB GenImage image data, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own in `01_metadata_EDA.ipynb` in order to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
 
 
 ### Bias-Matching
