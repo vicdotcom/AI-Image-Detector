@@ -83,7 +83,6 @@ The matched, balanced selection is exported to `data/interim/genimage_matched_ba
 
 Following [Grommelt et al. (2024)](https://arxiv.org/abs/2403.17608), the residual dimension/compression differences are normalized directly:
 - **Re-encode the AI images at JPEG QF = 96** to match the real images' compression.
-- **Content balancing:** *"We then sampled the same number of generated images for each 512x512 generator. To avoid disparities in content distribution between natural and generated images, we ensured an equal number of natural and generated images per ImageNet class."*
 - Crop/resize both real and AI images to a uniform 512x512 so a transform is never applied to only one class.
 
 ### Image integrity checks (`Integrity.py`)
