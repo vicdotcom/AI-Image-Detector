@@ -64,7 +64,7 @@ dedup:
 # Final level preprocessing applied to each image 
 # images are resized and re-encoded in order to eliminate any signal from dimensions and jpeg_qf
 preprocessing:
-  image_size: 512 
+  image_size: 224 
   jpeg_qf: 96
 
 # ---------------------------------------------------------------------

@@ -56,7 +56,7 @@ def test_process_one_writes_expected_qf(tmp_path, cfg):
     _make_image(200, 200).save(src)
     dst = tmp_path / "out" / "img.jpg"
 
-    result = process_one((src, dst, cfg))
+    result = process_one((src, dst, cfg, True))
     assert result["processed_ok"] is True
     assert dst.exists()
 
@@ -68,7 +68,7 @@ def test_process_one_writes_expected_qf(tmp_path, cfg):
 def test_process_one_reports_failure_without_raising(tmp_path, cfg):
     missing_src = tmp_path / "does_not_exist.jpg"
     dst = tmp_path / "out.jpg"
-    result = process_one((missing_src, dst, cfg))
+    result = process_one((missing_src, dst, cfg, True))
     assert result["processed_ok"] is False
     assert result["processed_error"] is not None
     assert not dst.exists()
@@ -91,5 +91,14 @@ def test_build_processed_dataset_layout(tmp_path, cfg):
 
     assert out["processed_ok"].all()
     assert (processed_root / "train" / "ai" / "hash0.jpg").exists()
-    assert (processed_root / "train" / "human" / "hash1.jpg").exists()
+    assert (processed_root / "train" / "human" / "hash1.png").exists()
     assert (processed_root / "val" / "ai" / "hash2.jpg").exists()
+
+def test_real_images_saved_as_lossless_png(tmp_path, cfg):
+    src = tmp_path / "src.jpg"
+    _make_image(200, 200).save(src, quality=96)
+    dst = tmp_path / "out" / "img.png"
+    assert process_one((src, dst, cfg, False))["processed_ok"] is True
+    with Image.open(dst) as im:
+        assert im.format == "PNG"
+        assert im.size == (cfg.image_size, cfg.image_size)

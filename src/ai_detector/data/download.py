@@ -831,7 +831,7 @@ def download_raise(dest: Path) -> list[ProvenanceRecord]:
     and does not provide a stable direct-download URL, this handler
     guides you through two options:
  
-    Option A — Kaggle CLI (recommended for automation)::
+    Option A — Kaggle CLI (recommended for automation):
  
         pip install kaggle
         kaggle datasets download -d mrutyunjaybiswal/raisetiff-uncompressed-images-dataset-x300 -p data/raw/raise --unzip
