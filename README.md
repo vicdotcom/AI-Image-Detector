@@ -41,7 +41,7 @@ This is however not a straight-forward task. The model, rather than distinguish 
 
   - A model trained on one generator family (e.g.- Midjourney) tends to learn that family's fingerprint rather than "AI-ness" in general, so accuracy can collapse on an unseen generator (e.g.- DALL-E), a form of [distribution shift](https://parasdahal.com/notes/distribution-shift/).
   - If the images from each class differ systematically in resolution/format/compression, etc..., a model can learn *that* instead (shortcut learning)
-  - Image duplicates or near duplicates can present a form of data leakage if they are spread between train/validation/test splits
+  - Image duplicates or near duplicates can present a form of data leakage in the event they are spread between train/validation/test splits
 
 We aim to produce the best probabilistic estimate from a model fit to a specific distribution. That is: *image is likely AI-generated (model score 0.91)*. Our objective and scope for the project is therefore as follows: 
 > Build a binary image classifier that, given a single still image, outputs a calibrated probability that the image was fully synthesized by a generative model.
@@ -58,7 +58,8 @@ real (ImageNet) / fake pairs across 8 generators, with deliberate bias controls 
 -  **[COCO](https://cocodataset.org/#overview)** - solely real images, used to assess the false-positive rate on an unseen real-image source.
 - **[RAISE](https://loki.disi.unitn.it/RAISE/)** - uncompressed RAW-derived images; the hardest real-image shift.
 
-**Metadata-level EDA (`01_metadata_EDA.ipynb`):** before downloading actual image, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own. This is what makes it possible to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
+### Metadata Analysis
+Rather than instantly downloading the full ~600 GB GenImage image data, the [GenImage metadata CSV](https://dataverse.harvard.edu/file.xhtml?fileId=9659368&version=2.0) (dimensions, generator, JPEG quality, class label) is analyzed on its own in `01_metadata_EDA.ipynb` in order to plan a dataset subset and catch shortcut learning risks without touching the images themselves.
 
 
 ### Bias-Matching
@@ -82,7 +83,6 @@ The matched, balanced selection is exported to `data/interim/genimage_matched_ba
 
 Following [Grommelt et al. (2024)](https://arxiv.org/abs/2403.17608), the residual dimension/compression differences are normalized directly:
 - **Re-encode the AI images at JPEG QF = 96** to match the real images' compression.
-- **Content balancing:** *"We then sampled the same number of generated images for each 512x512 generator. To avoid disparities in content distribution between natural and generated images, we ensured an equal number of natural and generated images per ImageNet class."*
 - Crop/resize both real and AI images to a uniform 512x512 so a transform is never applied to only one class.
 
 ### Image integrity checks (`Integrity.py`)
