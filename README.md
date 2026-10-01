@@ -104,7 +104,7 @@ A manifest is simply a table dataset of per-image metadata and labels (one row p
 | data/raw/genimage/sd_v1_4/000123.jpg | genimage | stable_diffusion_v_1_4 | fake | 512 | 512 | 92 | a1b2c3... |
 | data/raw/coco/000456.jpg | coco | real | real | 640 | 480 | 88 | d4e5f6... |
 
-The per-source outputs of the download, integrity and manifest recording steps (GenImage, Tiny GenImage, NTIRE, COCO, RAISE) are then combined into one unified manifest, which is the single input where everything downstream (i.e.- preprocessing, splitting, train/val/test) is built from.
+The per-source outputs of the download, integrity and manifest recording steps (GenImage, Tiny GenImage, NTIRE, COCO, RAISE) are then combined into one unified manifest, which is the single input where everything downstream (i.e.- preprocessing, splitting, train/val/test, modelling) is built from.
 
 ### Splitting Philosophy
 

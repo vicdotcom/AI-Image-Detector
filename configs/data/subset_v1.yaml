@@ -29,14 +29,10 @@ real_generator_token: nature
 train_generators:
   - stable_diffusion_v_1_4
   - stable_diffusion_v_1_5
-  - glide
-  - adm
-  - vqdm
+  - wukong
 
 ood_generators:
   - midjourney
-  - wukong
-  - biggan
 
 # ---------------------------------------------------------------------
 # Bias matching

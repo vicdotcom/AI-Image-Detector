@@ -45,6 +45,7 @@ from typing import Any, cast, Sequence # Allows type hinting into Any datatype
 
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -293,6 +294,7 @@ def shortcut_probe(df: pd.DataFrame,
       # Returns average accuracy score across 5 corss-validation folds
       # We use a simple classifier as the goal is to identify where an obvious metadata shortcut is present
 
+
 ## ==================================================================================
 ## Image Data Splitting
 ## ==================================================================================
@@ -434,10 +436,9 @@ def combine_manifests(paths: Sequence[Path]) -> pd.DataFrame:
 def assign_group_ids(df: pd.DataFrame, phash_col: str = "phash", 
     max_distance: int =5, n_bands: int = 4) -> pd.DataFrame:
     """
-    Runs banded-LSH near-duplicate clustering (see `integrity.near_duplicate_pairs`)
-    over the FULL combined manifest and writes the resulting `group_id` column.
+    Runs banded-LSH near-duplicate clustering (see `integrity.near_duplicate_pairs`) over the FULL combined manifest and writes the resulting `group_id` column.
 
-    This must run on the combined manifest, not per-source, because a duplicate cluster crossing between image soruces (i.e.- the same underlying photo appearing in two datasets) is the kind of leakage that should be avoided if  are to perform an out-of-distribution test.
+    This must run on the combined manifest, not per-source, because a duplicate cluster crossing between image soruces (i.e.- the same underlying photo appearing in two datasets) is the kind of leakage that should be avoided if we are to perform an out-of-distribution test.
 
     Rows with missing/empty phash (typically `is_corrupt == True`) are given their own singleton group so they never accidentally cluster with a valid image just because both hashes are blank.
 
@@ -521,4 +522,121 @@ def assign_full_splits(df: pd.DataFrame, cfg: SubsetConfig,
             f"{unresolved} rows have no split logic (unknown sources: {bad_sources}). "
             "Add them to genimage_sources or fixed_lookup."
         )
+    return df
+
+
+## ==================================================================================
+## Real Image Pooling and Redistribution
+## ==================================================================================
+def redistribute_real_images(df: pd.DataFrame,
+                             cfg: SubsetConfig,
+                             group_col: str = "group_id",
+                             label_col: str = "label",
+                             source_col: str = "source",
+                             genimage_sources: tuple[str, ...] = ("genimage", "unbiased_genimage", "genimage_unbiased"),
+                             ) -> pd.DataFrame:
+    """
+    
+    This function redistributes real images across remaining AI generators following the removal of images below a certain size/resolution threshold (see ``metadata_EDA.ipynb``).
+
+    Pools every real GenImage image and randomly redistributes them across the configured generators so that each generator has (as close as possible to) as many real images as fake ones, thereby ensuring a balanced daatset.
+
+    In GenImage, a real image's `generator` is merely the folder it shipped in. Real images are exchangeable across folders, so reals from generators that were discarded (not in `cfg.train_generators` or `cfg.ood_generators`) are valid extra reals for the generators we keep.
+
+    The redistribution is done over GROUPS (see `assign_group_ids`), never over rows, so near-duplicates always travel together. Because the reals take on a configured generator name, the later `assign_genimage_splits` call routes them through the exact same in-distribution (train/val/test_in_dist) or OOD path as that generator's fakes. No real group can therefore end up on both sides of a split boundary.
+
+    Only GenImage rows (`source_col` in `genimage_sources`) are touched. Rows from any other source are returned unchanged. Fakes are NEVER dropped or relabelled beyond canonical spelling; the only rows ever removed are surplus reals beyond what is needed to balance.
+
+    Steps:
+      1. Fakes from configured generators get the spelling used in the config (matching is case-insensitive i.e.- `Midjourney` == `midjourney`). Fakes from generators outside the config (expected to have been dropped already) are left untouched and flagged in the `unconfigured_fake` column, with a warning if any exist
+      2. Real groups that also contain a kept fake (cross-label near-duplicates) are pinned to that fake's generator, as both must land in the same split
+      3. The remaining real groups are shuffled (`cfg.seed`) and each is given to the generator with the largest outstanding real deficit
+      4. Surplus real groups, once every generator is balanced, are dropped (the only rows removed)
+
+    Params:
+      df (pd.DataFrame): GenImage-only metadata with `generator`, `group_col` and `label_col` (0= real, 1= AI-generated). If `label_col` is absent, reals are identified using `cfg.real_generator_token`. Call this after `assign_group_ids` and (typically) after `apply_matching`.
+      cfg (SubsetConfig): Supplies the generators, `seed` and the real token.
+      group_col (str): Near-duplicate group column
+      label_col (str): Binary label column
+      source_col (str): Column identifying the dataset source. If absent, every row is treated as GenImage.
+      genimage_sources (tuple[str, ...]): `source_col` values considered GenImage.
+
+    Returns:
+      pd.DataFrame: A copy where GenImage reals carry a configured generator name (surplus reals removed) and all fakes and non-GenImage rows are retained. The original folder is kept in a new `source_folder` column and `unconfigured_fake` flags fakes from generators outside the config.
+
+    Raises:
+      ValueError: If a configured generator has no fake images.
+
+    Warns:
+      If there are too few real images to match a generator's fakes. The shortfall is reported rather than filled by oversampling.
+    """
+    rng = np.random.default_rng(cfg.seed)
+    canon = {g.lower(): g for g in [*cfg.train_generators, *cfg.ood_generators]}
+
+    full = df.copy()
+    is_gi = full[source_col].isin(genimage_sources) if source_col in full.columns else pd.Series(True, index=full.index)
+    others = full[~is_gi].copy()
+    df = full[is_gi].copy()
+
+    gen_key = df["generator"].astype(str).str.lower()
+    if label_col in df.columns:
+        is_real = df[label_col] == 0
+    else:
+        is_real = gen_key == cfg.real_generator_token.lower()
+    is_fake_kept = ~is_real & gen_key.isin(canon)
+
+    df["unconfigured_fake"] = ~is_real & ~is_fake_kept
+    if df["unconfigured_fake"].any():
+        extra = sorted(df.loc[df["unconfigured_fake"], "generator"].astype(str).unique())
+        warnings.warn(f"Fakes from generators outside the config are present (not balanced against): {extra}")
+
+    df["source_folder"] = df["generator"]
+    df.loc[is_fake_kept, "generator"] = gen_key[is_fake_kept].map(canon)
+
+    # Number of real images each generator needs in order to match its fakes
+    target = df.loc[is_fake_kept, "generator"].value_counts().reindex(list(canon.values()), fill_value=0)
+    empty = target[target == 0].index.tolist()
+    if empty:
+        raise ValueError(f"No fake images found for configured generators: {empty}")
+    assigned = {g: 0 for g in target.index}
+
+    real_sizes = df.loc[is_real].groupby(group_col).size()
+    group_to_gen: dict[Any, str] = {}
+
+    # Real groups sharing a cluster with a kept fake are pinned to that fake's generator
+    fake_group_gen = (
+        df.loc[is_fake_kept].groupby([group_col, "generator"]).size().rename("n").reset_index()
+          .sort_values([group_col, "n"], ascending=[True, False])
+          .drop_duplicates(group_col).set_index(group_col)["generator"]
+    )
+    pinned = real_sizes.index.intersection(fake_group_gen.index)
+    for gid in pinned:
+        g = fake_group_gen[gid]
+        group_to_gen[gid] = g
+        assigned[g] += int(real_sizes[gid])
+
+    # Everything else is shuffled and handed to whichever generator is furthest from its target
+    free = real_sizes.index.difference(pinned).to_numpy().copy()
+    rng.shuffle(free)
+    gens = list(target.index)
+    for gid in free:
+        deficits = np.array([target[g] - assigned[g] for g in gens])
+        if deficits.max() <= 0:
+            break
+        g = gens[int(deficits.argmax())]
+        group_to_gen[gid] = g
+        assigned[g] += int(real_sizes[gid])
+
+    short = {g: int(target[g] - assigned[g]) for g in gens if assigned[g] < target[g]}
+    if short:
+        warnings.warn(f"Not enough real images to balance generators (missing reals): {short}")
+
+    real_new_gen = df[group_col].map(group_to_gen)
+    keep_real = is_real & real_new_gen.notna()
+    df.loc[keep_real, "generator"] = real_new_gen[keep_real]
+    df = df[~is_real | keep_real]
+    if not others.empty:
+        others["source_folder"] = others["generator"]
+        others["unconfigured_fake"] = False
+        df = pd.concat([df, others]).sort_index()
     return df

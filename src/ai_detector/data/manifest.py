@@ -436,10 +436,6 @@ class LeakageError(AssertionError): # Custom excption definition
 def assert_no_leakage(df: pd.DataFrame, keys: Iterable[str] = ("sha256", "group_id")) -> None:
     """
     This function checks whether particular hash identifiers occur across multiple splits.
- 
-    Run this as a unit test, not as a notebook cell you might forget. The whole
-    credibility of every number you report later rests on this assertion
-    holding. If it fails, your test accuracy is measuring memorisation.
     """
     problems = []
     for key in keys:
